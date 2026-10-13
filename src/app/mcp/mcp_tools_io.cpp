@@ -147,6 +147,111 @@ std::string readPixelScript(const std::string& layerName, const int frameIndex)
   return script;
 }
 
+// Built-in convolution matrix names from data/convmatr.def, sorted
+// alphabetically for stable output. Stored as data like the reference
+// tool does, so user matrices in convmatr.usr don't change the listing.
+const char* const kConvolutionMatrixNames[] = {
+  "blur-17x17",
+  "blur-17x3-left",
+  "blur-3x17-top",
+  "blur-3x3",
+  "blur-3x3-hard",
+  "blur-5x3-left",
+  "blur-5x5",
+  "blur-5x5-diagonal(/)",
+  "blur-5x5-diagonal(\\)",
+  "blur-7x7",
+  "blur-9x9",
+  "brightness",
+  "contrast",
+  "drunk-17x17_+",
+  "drunk-17x17_o",
+  "drunk-17x17_x",
+  "drunk-3x3_+",
+  "drunk-3x3_x",
+  "drunk-5x5_+",
+  "drunk-5x5_x",
+  "drunk-7x7_+",
+  "drunk-7x7_x",
+  "drunk-9x9_+",
+  "drunk-9x9_x",
+  "edges-find",
+  "edges-find-horizontal",
+  "edges-find-vertical",
+  "misc-contour",
+  "misc-emboss",
+  "misc-marmolize",
+  "misc-rock",
+  "misc-rock-edges",
+  "misc-texturize",
+  "negative",
+  "outline-transparent-layer-(cross)",
+  "outline-transparent-layer-(square)",
+  "sharpen-3x3",
+  "sharpen-5x5",
+  "sharpen-7x7",
+};
+
+bool isConvolutionMatrix(const std::string& name)
+{
+  for (const char* matrix : kConvolutionMatrixNames) {
+    if (name == matrix)
+      return true;
+  }
+  return false;
+}
+
+// Wraps a native app.command.* filter so it acts on the requested
+// layer/frame (and region) instead of whatever happens to be active:
+// resolves and activates the target first, scopes the command with a
+// selection when a region is given, runs it inside a transaction, then
+// deselects and saves. The command argument is the Lua call itself,
+// e.g. "app.command.InvertColor{ui=false}".
+std::string nativeFilterScript(const std::string& filterName,
+                               const std::string& command,
+                               const std::string& layerName,
+                               const int frameIndex,
+                               const int x, const int y,
+                               const int width, const int height)
+{
+  const bool hasRegion = (width > 0 && height > 0);
+
+  std::string script = std::string(kFindLayerLua) +
+    "local spr = app.activeSprite\n"
+    "if not spr then print(\"ERROR:No active sprite\") return end\n"
+    "\n"
+    "local idx = " + std::to_string(frameIndex) + "\n"
+    "if idx < 1 or idx > #spr.frames then print(\"ERROR:Frame index out of range\") return end\n"
+    "app.activeFrame = spr.frames[idx]\n";
+
+  if (!layerName.empty()) {
+    script +=
+      "local target = find_layer(spr, \"" + luaString(layerName) + "\")\n"
+      "if not target then print(\"ERROR:Layer not found\") return end\n"
+      "app.activeLayer = target\n";
+  }
+  if (hasRegion) {
+    script +=
+      "spr.selection = Selection(Rectangle(" +
+      std::to_string(x) + ", " + std::to_string(y) + ", " +
+      std::to_string(width) + ", " + std::to_string(height) + "))\n";
+  }
+
+  script +=
+    "\n"
+    "local ok = false\n"
+    "app.transaction(function()\n"
+    "  ok = " + command + "\n"
+    "end)\n";
+  if (hasRegion)
+    script += "spr.selection:deselect()\n";
+  script +=
+    "if not ok then print(\"ERROR:Failed to run " + luaString(filterName) + "\") return end\n"
+    "spr:saveAs(spr.filename)\n"
+    "print(\"OK\")";
+  return script;
+}
+
 } // anonymous namespace
 
 void register_io_tools(std::vector<McpTool>& tools)
@@ -1061,6 +1166,338 @@ void register_io_tools(std::vector<McpTool>& tools)
              "  opaque_pixels = opaque,\n"
              "  top_colors = top_colors,\n"
              "}))";
+    }));
+
+  tools.push_back(LuaTool(
+    "outline_native",
+    "Add a 1px outline around the opaque pixels of a layer/frame with Aseprite's native "
+    "Outline filter (engine-quality). place chooses outside or inside the shape, matrix the "
+    "circle or square brush. The file is saved.",
+    json11::Json::object {
+      { "type", "object" },
+      { "properties", json11::Json::object {
+        { "filename", json11::Json::object {
+            { "type", "string" },
+            { "description", "Aseprite file to modify" } } },
+        { "layer_name", json11::Json::object {
+            { "type", "string" },
+            { "description", "Layer to outline, by name or group/child path "
+                             "(default: active layer)" } } },
+        { "frame_index", json11::Json::object {
+            { "type", "integer" },
+            { "description", "Frame index starting at 1 (default: 1)" } } },
+        { "color", json11::Json::object {
+            { "type", "string" },
+            { "description", "Outline color as #RRGGBB (default: \"#000000\")" } } },
+        { "place", json11::Json::object {
+            { "type", "string" },
+            { "description", "\"outside\" or \"inside\" (default: \"outside\")" } } },
+        { "matrix", json11::Json::object {
+            { "type", "string" },
+            { "description", "Brush shape: \"circle\" or \"square\" (default: \"circle\")" } } },
+      } },
+      { "required", json11::Json::array { "filename" } },
+    },
+    true,
+    [](const json11::Json& args) -> std::string {
+      int r = 0, g = 0, b = 0, a = 0;
+      if (!parseHexColor(argString(args, "color", "#000000"), r, g, b, a))
+        return luaError("Invalid color (expected #RRGGBB)");
+      const std::string place = argString(args, "place", "outside");
+      if (place != "outside" && place != "inside")
+        return luaError("place must be 'outside' or 'inside'");
+      const std::string matrix = argString(args, "matrix", "circle");
+      if (matrix != "circle" && matrix != "square")
+        return luaError("matrix must be 'circle' or 'square'");
+
+      return nativeFilterScript(
+        "Outline",
+        "app.command.Outline{ui=false, color=Color{r=" + std::to_string(r) +
+        ", g=" + std::to_string(g) + ", b=" + std::to_string(b) +
+        ", a=255}, place=\"" + place + "\", matrix=\"" + matrix + "\"}",
+        argString(args, "layer_name"), argInt(args, "frame_index", 1),
+        0, 0, 0, 0);
+    }));
+
+  tools.push_back(LuaTool(
+    "adjust_hsl_native",
+    "Shift the hue and adjust saturation/lightness of a layer/frame with Aseprite's native "
+    "Hue/Saturation filter, optionally limited to a rectangle. The file is saved.",
+    json11::Json::object {
+      { "type", "object" },
+      { "properties", json11::Json::object {
+        { "filename", json11::Json::object {
+            { "type", "string" },
+            { "description", "Aseprite file to modify" } } },
+        { "layer_name", json11::Json::object {
+            { "type", "string" },
+            { "description", "Layer to adjust, by name or group/child path "
+                             "(default: active layer)" } } },
+        { "frame_index", json11::Json::object {
+            { "type", "integer" },
+            { "description", "Frame index starting at 1 (default: 1)" } } },
+        { "hue", json11::Json::object {
+            { "type", "integer" },
+            { "description", "Hue shift in degrees, -180 to 180 (default: 0)" } } },
+        { "saturation", json11::Json::object {
+            { "type", "integer" },
+            { "description", "Saturation change, -100 to 100 (default: 0)" } } },
+        { "lightness", json11::Json::object {
+            { "type", "integer" },
+            { "description", "Lightness change, -100 to 100 (default: 0)" } } },
+        { "x", json11::Json::object {
+            { "type", "integer" },
+            { "description", "Region left edge (default: 0)" } } },
+        { "y", json11::Json::object {
+            { "type", "integer" },
+            { "description", "Region top edge (default: 0)" } } },
+        { "width", json11::Json::object {
+            { "type", "integer" },
+            { "description", "Region width; the region is applied only when width and "
+                             "height are > 0 (default: 0)" } } },
+        { "height", json11::Json::object {
+            { "type", "integer" },
+            { "description", "Region height; the region is applied only when width and "
+                             "height are > 0 (default: 0)" } } },
+      } },
+      { "required", json11::Json::array { "filename" } },
+    },
+    true,
+    [](const json11::Json& args) -> std::string {
+      const int hue = argInt(args, "hue");
+      const int saturation = argInt(args, "saturation");
+      const int lightness = argInt(args, "lightness");
+      if (hue < -180 || hue > 180)
+        return luaError("hue must be between -180 and 180");
+      if (saturation < -100 || saturation > 100 || lightness < -100 || lightness > 100)
+        return luaError("saturation and lightness must be between -100 and 100");
+
+      return nativeFilterScript(
+        "HueSaturation",
+        "app.command.HueSaturation{ui=false, hue=" + std::to_string(hue) +
+        ", saturation=" + std::to_string(saturation) +
+        ", lightness=" + std::to_string(lightness) + ", alpha=0}",
+        argString(args, "layer_name"), argInt(args, "frame_index", 1),
+        argInt(args, "x"), argInt(args, "y"), argInt(args, "width"), argInt(args, "height"));
+    }));
+
+  tools.push_back(LuaTool(
+    "adjust_brightness_contrast",
+    "Adjust the brightness and contrast of a layer/frame with Aseprite's native "
+    "Brightness/Contrast filter, optionally limited to a rectangle. The file is saved.",
+    json11::Json::object {
+      { "type", "object" },
+      { "properties", json11::Json::object {
+        { "filename", json11::Json::object {
+            { "type", "string" },
+            { "description", "Aseprite file to modify" } } },
+        { "layer_name", json11::Json::object {
+            { "type", "string" },
+            { "description", "Layer to adjust, by name or group/child path "
+                             "(default: active layer)" } } },
+        { "frame_index", json11::Json::object {
+            { "type", "integer" },
+            { "description", "Frame index starting at 1 (default: 1)" } } },
+        { "brightness", json11::Json::object {
+            { "type", "integer" },
+            { "description", "Brightness change, -100 to 100 (default: 0)" } } },
+        { "contrast", json11::Json::object {
+            { "type", "integer" },
+            { "description", "Contrast change, -100 to 100 (default: 0)" } } },
+        { "x", json11::Json::object {
+            { "type", "integer" },
+            { "description", "Region left edge (default: 0)" } } },
+        { "y", json11::Json::object {
+            { "type", "integer" },
+            { "description", "Region top edge (default: 0)" } } },
+        { "width", json11::Json::object {
+            { "type", "integer" },
+            { "description", "Region width; the region is applied only when width and "
+                             "height are > 0 (default: 0)" } } },
+        { "height", json11::Json::object {
+            { "type", "integer" },
+            { "description", "Region height; the region is applied only when width and "
+                             "height are > 0 (default: 0)" } } },
+      } },
+      { "required", json11::Json::array { "filename" } },
+    },
+    true,
+    [](const json11::Json& args) -> std::string {
+      const int brightness = argInt(args, "brightness");
+      const int contrast = argInt(args, "contrast");
+      if (brightness < -100 || brightness > 100 || contrast < -100 || contrast > 100)
+        return luaError("brightness and contrast must be between -100 and 100");
+
+      return nativeFilterScript(
+        "BrightnessContrast",
+        "app.command.BrightnessContrast{ui=false, brightness=" + std::to_string(brightness) +
+        ", contrast=" + std::to_string(contrast) + "}",
+        argString(args, "layer_name"), argInt(args, "frame_index", 1),
+        argInt(args, "x"), argInt(args, "y"), argInt(args, "width"), argInt(args, "height"));
+    }));
+
+  tools.push_back(LuaTool(
+    "invert_colors",
+    "Invert the RGB colors of a layer/frame with Aseprite's native Invert Color filter "
+    "(alpha is preserved), optionally limited to a rectangle. The file is saved.",
+    json11::Json::object {
+      { "type", "object" },
+      { "properties", json11::Json::object {
+        { "filename", json11::Json::object {
+            { "type", "string" },
+            { "description", "Aseprite file to modify" } } },
+        { "layer_name", json11::Json::object {
+            { "type", "string" },
+            { "description", "Layer to invert, by name or group/child path "
+                             "(default: active layer)" } } },
+        { "frame_index", json11::Json::object {
+            { "type", "integer" },
+            { "description", "Frame index starting at 1 (default: 1)" } } },
+        { "x", json11::Json::object {
+            { "type", "integer" },
+            { "description", "Region left edge (default: 0)" } } },
+        { "y", json11::Json::object {
+            { "type", "integer" },
+            { "description", "Region top edge (default: 0)" } } },
+        { "width", json11::Json::object {
+            { "type", "integer" },
+            { "description", "Region width; the region is applied only when width and "
+                             "height are > 0 (default: 0)" } } },
+        { "height", json11::Json::object {
+            { "type", "integer" },
+            { "description", "Region height; the region is applied only when width and "
+                             "height are > 0 (default: 0)" } } },
+      } },
+      { "required", json11::Json::array { "filename" } },
+    },
+    true,
+    [](const json11::Json& args) -> std::string {
+      return nativeFilterScript(
+        "InvertColor",
+        "app.command.InvertColor{ui=false}",
+        argString(args, "layer_name"), argInt(args, "frame_index", 1),
+        argInt(args, "x"), argInt(args, "y"), argInt(args, "width"), argInt(args, "height"));
+    }));
+
+  tools.push_back(LuaTool(
+    "apply_convolution",
+    "Apply one of Aseprite's built-in convolution matrices (blur, sharpen, edges, emboss, "
+    "...) to a layer/frame, optionally limited to a rectangle; matrix names come from "
+    "list_convolution_matrices. The file is saved.",
+    json11::Json::object {
+      { "type", "object" },
+      { "properties", json11::Json::object {
+        { "filename", json11::Json::object {
+            { "type", "string" },
+            { "description", "Aseprite file to modify" } } },
+        { "matrix", json11::Json::object {
+            { "type", "string" },
+            { "description", "Built-in matrix name, e.g. \"blur-3x3\", \"sharpen-3x3\", "
+                             "\"edges-find\", \"misc-emboss\"" } } },
+        { "layer_name", json11::Json::object {
+            { "type", "string" },
+            { "description", "Layer to filter, by name or group/child path "
+                             "(default: active layer)" } } },
+        { "frame_index", json11::Json::object {
+            { "type", "integer" },
+            { "description", "Frame index starting at 1 (default: 1)" } } },
+        { "x", json11::Json::object {
+            { "type", "integer" },
+            { "description", "Region left edge (default: 0)" } } },
+        { "y", json11::Json::object {
+            { "type", "integer" },
+            { "description", "Region top edge (default: 0)" } } },
+        { "width", json11::Json::object {
+            { "type", "integer" },
+            { "description", "Region width; the region is applied only when width and "
+                             "height are > 0 (default: 0)" } } },
+        { "height", json11::Json::object {
+            { "type", "integer" },
+            { "description", "Region height; the region is applied only when width and "
+                             "height are > 0 (default: 0)" } } },
+      } },
+      { "required", json11::Json::array { "filename", "matrix" } },
+    },
+    true,
+    [](const json11::Json& args) -> std::string {
+      const std::string matrix = argString(args, "matrix");
+      if (!isConvolutionMatrix(matrix))
+        return luaError("Unknown matrix " + matrix + "; see list_convolution_matrices");
+
+      return nativeFilterScript(
+        "ConvolutionMatrix",
+        "app.command.ConvolutionMatrix{ui=false, fromResource=\"" + luaString(matrix) + "\"}",
+        argString(args, "layer_name"), argInt(args, "frame_index", 1),
+        argInt(args, "x"), argInt(args, "y"), argInt(args, "width"), argInt(args, "height"));
+    }));
+
+  tools.push_back(NativeTool(
+    "list_convolution_matrices",
+    "List the built-in convolution matrix names accepted by apply_convolution, as a JSON "
+    "array sorted alphabetically.",
+    json11::Json::object {
+      { "type", "object" },
+      { "properties", json11::Json::object {} },
+      { "required", json11::Json::array {} },
+    },
+    [](const json11::Json&) -> ToolResult {
+      json11::Json::array matrices;
+      for (const char* matrix : kConvolutionMatrixNames)
+        matrices.push_back(matrix);
+
+      ToolResult result;
+      result.text = json11::Json(matrices).dump();
+      return result;
+    }));
+
+  tools.push_back(LuaTool(
+    "extract_palette",
+    "Build an optimal palette from the colors used in the sprite with Aseprite's native "
+    "color quantization, and write it to the sprite. Returns JSON "
+    "{\"colors\": [\"#RRGGBB\", ...], \"count\": N}. The file is saved.",
+    json11::Json::object {
+      { "type", "object" },
+      { "properties", json11::Json::object {
+        { "filename", json11::Json::object {
+            { "type", "string" },
+            { "description", "Aseprite file to modify" } } },
+        { "max_colors", json11::Json::object {
+            { "type", "integer" },
+            { "description", "Palette size cap, 1 to 256; the result can use fewer "
+                             "colors (default: 16)" } } },
+        { "with_alpha", json11::Json::object {
+            { "type", "boolean" },
+            { "description", "Include the alpha channel when quantizing (default: false)" } } },
+      } },
+      { "required", json11::Json::array { "filename" } },
+    },
+    true,
+    [](const json11::Json& args) -> std::string {
+      const int maxColors = argInt(args, "max_colors", 16);
+      if (maxColors < 1 || maxColors > 256)
+        return luaError("max_colors must be between 1 and 256");
+
+      return
+        "local spr = app.activeSprite\n"
+        "if not spr then print(\"ERROR:No active sprite\") return end\n"
+        "\n"
+        "local ok = false\n"
+        "app.transaction(function()\n"
+        "  ok = app.command.ColorQuantization{ui=false, maxColors=" +
+        std::to_string(maxColors) + ", withAlpha=" +
+        (argBool(args, "with_alpha") ? "true" : "false") + "}\n"
+        "end)\n"
+        "if not ok then print(\"ERROR:Color quantization failed\") return end\n"
+        "\n"
+        "spr:saveAs(spr.filename)\n"
+        "local pal = spr.palettes[1]\n"
+        "if not pal then print(\"ERROR:No palette after quantization\") return end\n"
+        "local colors = {}\n"
+        "for i = 0, #pal - 1 do\n"
+        "  local c = pal:getColor(i)\n"
+        "  table.insert(colors, string.format(\"#%02X%02X%02X\", c.red, c.green, c.blue))\n"
+        "end\n"
+        "print(json.encode({ colors = colors, count = #colors }))";
     }));
 }
 

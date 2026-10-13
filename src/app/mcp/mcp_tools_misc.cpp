@@ -182,6 +182,53 @@ void register_misc_tools(std::vector<McpTool>& tools)
         "print(\"OK\")";
       return script;
     }));
+
+  tools.push_back(NativeTool(
+    "animation_workflow_guide",
+    "Return a short guide to the animation workflow these tools support: planning the "
+    "palette first, building in layers, drawing coarse to fine, checking the work with "
+    "exported frames, shading, animating with the cel tools, verifying, and exporting.",
+    json11::Json::object {
+      { "type", "object" },
+      { "properties", json11::Json::object {
+        { "use_case", json11::Json::object {
+            { "type", "string" },
+            { "description", "Label for the workflow context (default: \"character\")" } } },
+      } },
+      { "required", json11::Json::array {} },
+    },
+    [](const json11::Json& args) -> ToolResult {
+      std::string useCase = argString(args, "use_case", "character");
+      if (useCase.empty())
+        useCase = "character";
+
+      ToolResult result;
+      result.text =
+        "Animation workflow guide\n"
+        "Use case: " + useCase + "\n"
+        "\n"
+        "1. Plan the palette first: pick a small, coherent set of colors with set_palette, "
+        "apply_palette_preset or extract_palette before drawing, so every frame stays "
+        "consistent.\n"
+        "2. Build in layers: one layer per body part or scene element with add_layer; keep "
+        "static parts separate from moving ones so they can be propagated instead of "
+        "redrawn.\n"
+        "3. Draw coarse to fine: block in the big shapes with the drawing tools first, then "
+        "refine silhouettes and details in later passes.\n"
+        "4. Look at your work: export_frame at 8-10x scale and inspect the returned image "
+        "between passes instead of guessing at pixel level.\n"
+        "5. Shade with intent: shade on its own layer and reach for adjust_hsl_native, "
+        "adjust_brightness_contrast or apply_convolution for engine-quality touches.\n"
+        "6. Animate with the cel tools: block key poses on the first frame, then copy "
+        "cels/frames, propagate_cels for static layers, and tween or offset cel positions "
+        "for motion.\n"
+        "7. Verify motion: render_onion_skin shows neighboring frames together, and "
+        "compare_frames reports what actually changed between two frames.\n"
+        "8. Export and inspect: tag loop ranges with set_tag, export with export_tag, "
+        "export_spritesheet or export_sprite, and check the result before calling it "
+        "done.";
+      return result;
+    }));
 }
 
 } // namespace mcp

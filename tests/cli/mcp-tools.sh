@@ -376,3 +376,29 @@ PY
 resp=$(run_tool '{"jsonrpc":"2.0","id":135,"method":"tools/call","params":{"name":"export_spritesheet","arguments":{"filename":"'$t'/ro-bad.aseprite","output_filename":"'$t'/ro-sheet.png","scale":2},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}' 2>/dev/null)
 printf '%s' "$resp" | python3 -c 'import sys,json; r=json.load(sys.stdin)["result"]; assert r["isError"], repr(r); assert "failed to resize sprite for export" in r["content"][0]["text"], repr(r)' || fail "read-only scaled export: $resp"
 [ ! -f "$t/ro-sheet.png" ] || fail "read-only scaled export wrote a sheet: $resp"
+
+echo "MCP tools: native filter commands"
+run_tool '{"jsonrpc":"2.0","id":140,"method":"tools/call","params":{"name":"create_canvas","arguments":{"width":8,"height":8,"filename":"'$t'/fx.aseprite"},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}' >/dev/null
+run_tool '{"jsonrpc":"2.0","id":141,"method":"tools/call","params":{"name":"draw_pixels_at","arguments":{"filename":"'$t'/fx.aseprite","layer_name":"Layer 1","frame_index":1,"pixels":[{"x":1,"y":1,"color":"#ff0000"},{"x":2,"y":2,"color":"#ff0000"}]},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}' >/dev/null
+resp=$(run_tool '{"jsonrpc":"2.0","id":142,"method":"tools/call","params":{"name":"invert_colors","arguments":{"filename":"'$t'/fx.aseprite","layer_name":"Layer 1","frame_index":1},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}')
+printf '%s' "$resp" | grep -q '"isError":false' || fail "invert_colors: $resp"
+resp=$(run_tool '{"jsonrpc":"2.0","id":143,"method":"tools/call","params":{"name":"get_pixel_color","arguments":{"filename":"'$t'/fx.aseprite","x":1,"y":1,"layer_name":"Layer 1","frame_index":1},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}')
+printf '%s' "$resp" | python3 -c 'import sys,json; t=json.load(sys.stdin)["result"]["content"][0]["text"]; assert t.startswith("#00ffff (r=0, g=255, b=255, a=255)"), repr(t)' || fail "inverted pixel: $resp"
+resp=$(run_tool '{"jsonrpc":"2.0","id":144,"method":"tools/call","params":{"name":"outline_native","arguments":{"filename":"'$t'/fx.aseprite","layer_name":"Layer 1","frame_index":1},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}')
+printf '%s' "$resp" | grep -q '"isError":false' || fail "outline_native: $resp"
+resp=$(run_tool '{"jsonrpc":"2.0","id":145,"method":"tools/call","params":{"name":"get_pixel_color","arguments":{"filename":"'$t'/fx.aseprite","x":0,"y":1,"layer_name":"Layer 1","frame_index":1},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}')
+printf '%s' "$resp" | python3 -c 'import sys,json; t=json.load(sys.stdin)["result"]["content"][0]["text"]; assert t.startswith("#000000 (r=0, g=0, b=0, a=255)"), repr(t)' || fail "outlined pixel: $resp"
+resp=$(run_tool '{"jsonrpc":"2.0","id":146,"method":"tools/call","params":{"name":"adjust_hsl_native","arguments":{"filename":"'$t'/fx.aseprite","layer_name":"Layer 1","frame_index":1,"hue":45,"saturation":10,"lightness":-5},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}')
+printf '%s' "$resp" | grep -q '"isError":false' || fail "adjust_hsl_native: $resp"
+resp=$(run_tool '{"jsonrpc":"2.0","id":147,"method":"tools/call","params":{"name":"adjust_brightness_contrast","arguments":{"filename":"'$t'/fx.aseprite","layer_name":"Layer 1","frame_index":1,"brightness":10,"contrast":-5},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}')
+printf '%s' "$resp" | grep -q '"isError":false' || fail "adjust_brightness_contrast: $resp"
+resp=$(run_tool '{"jsonrpc":"2.0","id":148,"method":"tools/call","params":{"name":"apply_convolution","arguments":{"filename":"'$t'/fx.aseprite","matrix":"blur-3x3","layer_name":"Layer 1","frame_index":1},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}')
+printf '%s' "$resp" | grep -q '"isError":false' || fail "apply_convolution: $resp"
+resp=$(run_tool '{"jsonrpc":"2.0","id":149,"method":"tools/call","params":{"name":"apply_convolution","arguments":{"filename":"'$t'/fx.aseprite","matrix":"nope","layer_name":"Layer 1","frame_index":1},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}')
+printf '%s' "$resp" | python3 -c 'import sys,json; r=json.load(sys.stdin)["result"]; assert r["isError"], repr(r); assert "Unknown matrix" in r["content"][0]["text"], repr(r)' || fail "apply_convolution unknown matrix: $resp"
+resp=$(run_tool '{"jsonrpc":"2.0","id":150,"method":"tools/call","params":{"name":"extract_palette","arguments":{"filename":"'$t'/fx.aseprite","max_colors":4},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}')
+printf '%s' "$resp" | python3 -c 'import sys,json,re; t=json.load(sys.stdin)["result"]["content"][0]["text"]; d=json.loads(t); assert d["count"] == len(d["colors"]) and 1 <= d["count"] <= 4, repr(t); assert all(re.fullmatch(r"#[0-9A-F]{6}", c) for c in d["colors"]), repr(t)' || fail "extract_palette: $resp"
+resp=$(run_tool '{"jsonrpc":"2.0","id":151,"method":"tools/call","params":{"name":"list_convolution_matrices","arguments":{},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}')
+printf '%s' "$resp" | python3 -c 'import sys,json; t=json.load(sys.stdin)["result"]["content"][0]["text"]; m=json.loads(t); assert len(m) == 39, repr(t); assert "blur-3x3" in m and "misc-emboss" in m, repr(t)' || fail "list_convolution_matrices: $resp"
+resp=$(run_tool '{"jsonrpc":"2.0","id":152,"method":"tools/call","params":{"name":"animation_workflow_guide","arguments":{},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}')
+printf '%s' "$resp" | python3 -c 'import sys,json; t=json.load(sys.stdin)["result"]["content"][0]["text"]; assert t.strip(), repr(t)' || fail "animation_workflow_guide: $resp"
