@@ -194,6 +194,12 @@ if(ENABLE_SCRIPTING)
     commands/cmd_open_script_folder.cpp
     commands/cmd_run_script.cpp
     commands/debugger.cpp
+    mcp/mcp_protocol.cpp
+    mcp/mcp_protocol.h
+    mcp/mcp_server.cpp
+    mcp/mcp_server.h
+    mcp/mcp_tools_registry.cpp
+    mcp/mcp_tools_registry.h
     script/app_command_object.cpp
     script/app_clipboard_object.cpp
     script/app_fs_object.cpp

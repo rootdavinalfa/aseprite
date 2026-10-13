@@ -21,12 +21,14 @@ AppOptions::AppOptions(int argc, const char* argv[])
   : m_exeName(base::get_file_name(argv[0]))
   , m_startUI(true)
   , m_startShell(false)
+  , m_startMcp(false)
   , m_previewCLI(false)
   , m_showHelp(false)
   , m_showVersion(false)
   , m_verboseLevel(kNoVerbose)
 #ifdef ENABLE_SCRIPTING
   , m_shell(m_po.add("shell").description("Start an interactive console to execute scripts"))
+  , m_mcp(m_po.add("mcp").description("Start the MCP server on stdio"))
 #endif
   , m_batch(m_po.add("batch").mnemonic('b').description("Do not start the UI"))
   , m_preview(m_po.add("preview").mnemonic('p').description(
@@ -188,12 +190,13 @@ AppOptions::AppOptions(int argc, const char* argv[])
 
 #ifdef ENABLE_SCRIPTING
     m_startShell = m_po.enabled(m_shell);
+    m_startMcp = m_po.enabled(m_mcp);
 #endif
     m_previewCLI = m_po.enabled(m_preview);
     m_showHelp = m_po.enabled(m_help);
     m_showVersion = m_po.enabled(m_version);
 
-    if (m_startShell || m_showHelp || m_showVersion || m_po.enabled(m_batch)) {
+    if (m_startShell || m_startMcp || m_showHelp || m_showVersion || m_po.enabled(m_batch)) {
       m_startUI = false;
     }
   }

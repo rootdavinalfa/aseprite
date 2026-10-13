@@ -92,6 +92,7 @@
 #include <memory>
 
 #ifdef ENABLE_SCRIPTING
+  #include "app/mcp/mcp_server.h"
   #include "app/script/engine.h"
   #include "app/shell.h"
 #endif
@@ -246,6 +247,7 @@ App::App(AppMod* mod)
   , m_legacy(nullptr)
   , m_isGui(false)
   , m_isShell(false)
+  , m_isMcp(false)
   , m_backupIndicator(nullptr)
 #ifdef ENABLE_SCRIPTING
   , m_engine(new script::Engine)
@@ -281,6 +283,7 @@ int App::initialize(const AppOptions& options)
 #endif
 
   m_isShell = options.startShell();
+  m_isMcp = options.startMcp();
   m_coreModules = std::make_unique<CoreModules>();
 
   auto& pref = preferences();
@@ -580,6 +583,11 @@ void App::run(const bool runGuiManager)
     }
 
 #ifdef ENABLE_SCRIPTING
+    // Start the MCP server on stdio.
+    if (m_isMcp) {
+      mcp::McpServer::instance()->runStdio(*m_engine, *context());
+    }
+
     // Start shell to execute scripts.
     if (m_isShell) {
       m_engine->printLastResult(); // TODO is this needed?
