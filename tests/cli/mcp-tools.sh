@@ -140,3 +140,16 @@ printf 'garbage, not a sprite\n' > "$t/bad.aseprite"
 resp=$(printf '%s\n' '{"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"get_sprite_info","arguments":{"filename":"'$t'/bad.aseprite"},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}' | "$ASEPRITE" --mcp 2>/dev/null)
 printf '%s' "$resp" | python3 -c 'import sys,json; [json.loads(l) for l in sys.stdin if l.strip()]' || fail "load error leaked to stdout: $resp"
 printf '%s' "$resp" | python3 -c 'import sys,json; assert json.load(sys.stdin)["result"]["isError"]' || fail "corrupt file should be an error result: $resp"
+
+echo "MCP tools: animation and quality tools"
+run_tool '{"jsonrpc":"2.0","id":40,"method":"tools/call","params":{"name":"create_canvas","arguments":{"width":8,"height":8,"filename":"'$t'/anim.aseprite"},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}' >/dev/null
+resp=$(run_tool '{"jsonrpc":"2.0","id":41,"method":"tools/call","params":{"name":"add_frames","arguments":{"filename":"'$t'/anim.aseprite","count":1,"duration_ms":120},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}')
+printf '%s' "$resp" | grep -q '"isError":false' || fail "add_frames: $resp"
+run_tool '{"jsonrpc":"2.0","id":42,"method":"tools/call","params":{"name":"add_frames","arguments":{"filename":"'$t'/anim.aseprite","count":1,"duration_ms":200},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}' >/dev/null
+run_tool '{"jsonrpc":"2.0","id":43,"method":"tools/call","params":{"name":"set_tag","arguments":{"filename":"'$t'/anim.aseprite","name":"walk","from_frame":1,"to_frame":3,"direction":"pingpong"},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}' >/dev/null
+resp=$(run_tool '{"jsonrpc":"2.0","id":44,"method":"tools/call","params":{"name":"get_sprite_info","arguments":{"filename":"'$t'/anim.aseprite"},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}')
+printf '%s' "$resp" | python3 -c 'import sys,json; t=json.load(sys.stdin)["result"]["content"][0]["text"]; s=json.loads(t); assert s["frames"] == 3, repr(t); assert s["durations_ms"][1] == 120 and s["durations_ms"][2] == 200, repr(t); tags={x["name"]: x for x in s["tags"]}; assert tags["walk"] == {"name":"walk","from":1,"to":3,"direction":"pingpong"}, repr(t)' || fail "animation frames/tag: $resp"
+resp=$(run_tool '{"jsonrpc":"2.0","id":45,"method":"tools/call","params":{"name":"validate_scene","arguments":{"filename":"'$t'/anim.aseprite","required_layers":["Layer 1"]},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}')
+printf '%s' "$resp" | python3 -c 'import sys,json; t=json.load(sys.stdin)["result"]["content"][0]["text"]; r=json.loads(t); assert r["frames"] == 3, repr(t); assert r["range"] == {"start":1,"end":3}, repr(t); assert r["missing_layers"] == [] and r["missing_cels"] == [], repr(t)' || fail "validate_scene: $resp"
+resp=$(run_tool '{"jsonrpc":"2.0","id":46,"method":"tools/call","params":{"name":"add_frames","arguments":{"filename":"'$t'/anim.aseprite","count":0},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}')
+printf '%s' "$resp" | python3 -c 'import sys,json; r=json.load(sys.stdin)["result"]; assert r["isError"], repr(r); assert "Count must be >= 1" in r["content"][0]["text"], repr(r)' || fail "add_frames count validation: $resp"
