@@ -248,6 +248,8 @@ App::App(AppMod* mod)
   , m_isGui(false)
   , m_isShell(false)
   , m_isMcp(false)
+  , m_isMcpHttp(false)
+  , m_mcpHttpPort(0)
   , m_backupIndicator(nullptr)
 #ifdef ENABLE_SCRIPTING
   , m_engine(new script::Engine)
@@ -284,6 +286,8 @@ int App::initialize(const AppOptions& options)
 
   m_isShell = options.startShell();
   m_isMcp = options.startMcp();
+  m_isMcpHttp = options.startMcpHttp();
+  m_mcpHttpPort = options.mcpHttpPort();
   m_coreModules = std::make_unique<CoreModules>();
 
   auto& pref = preferences();
@@ -587,6 +591,14 @@ void App::run(const bool runGuiManager)
     if (m_isMcp) {
       mcp::McpServer::instance()->runStdio(*m_engine, *context());
     }
+
+  #ifdef ENABLE_WEBSOCKET
+    // Start the MCP HTTP server; blocks until the process is
+    // terminated (SIGINT/SIGTERM).
+    if (m_isMcpHttp) {
+      mcp::McpServer::instance()->runHttpOnly(m_mcpHttpPort);
+    }
+  #endif
 
     // Start shell to execute scripts.
     if (m_isShell) {

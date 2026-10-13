@@ -14,6 +14,16 @@
 
 #include "json11.hpp"
 
+#include <memory>
+#include <mutex>
+#include <string>
+
+namespace ix {
+struct HttpRequest;
+struct HttpResponse;
+class HttpServer;
+}
+
 namespace app {
 
 class Context;
@@ -32,8 +42,30 @@ public:
   // until stdin reaches EOF.
   void runStdio(script::Engine& engine, Context& context);
 
+#ifdef ENABLE_WEBSOCKET
+  // Serves MCP over HTTP on 127.0.0.1:<port> (single endpoint
+  // POST /mcp). Returns false and fills "error" when the port can't
+  // be bound.
+  bool startHttp(int port, std::string& error);
+  void stopHttp();
+  bool isHttpRunning() const;
+
+  // Starts the HTTP server and blocks until the process is
+  // terminated (used by the headless --mcp-http mode).
+  void runHttpOnly(int port);
+#endif
+
 private:
   json11::Json handleMessage(const json11::Json& request);
+
+#ifdef ENABLE_WEBSOCKET
+  std::shared_ptr<ix::HttpResponse> handleHttpRequest(
+    const std::shared_ptr<ix::HttpRequest>& request);
+  json11::Json dispatchHttp(const json11::Json& request);
+
+  std::unique_ptr<ix::HttpServer> m_httpServer;
+  std::mutex m_httpDispatchMutex;
+#endif
 };
 
 } // namespace mcp
