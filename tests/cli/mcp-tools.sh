@@ -30,3 +30,9 @@ printf 'local spr = Sprite(16, 16)\nspr:saveAs("%s/m.aseprite")\n' "$t" > "$t/mk
 "$ASEPRITE" -b --script "$t/mk.lua" || fail "fixture regeneration failed"
 resp=$(printf '%s\n' '{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"get_sprite_info","arguments":{"filename":"'$t'/m.aseprite"},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}' | "$ASEPRITE" --mcp)
 printf '%s' "$resp" | python3 -c 'import sys,json; t=json.load(sys.stdin)["result"]["content"][0]["text"]; assert json.loads(t)["width"] == 16, repr(t)' || fail "stale cache served: $resp"
+
+echo "MCP tools: load error stays pure JSON on stdout"
+printf 'garbage, not a sprite\n' > "$t/bad.aseprite"
+resp=$(printf '%s\n' '{"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"get_sprite_info","arguments":{"filename":"'$t'/bad.aseprite"},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}' | "$ASEPRITE" --mcp 2>/dev/null)
+printf '%s' "$resp" | python3 -c 'import sys,json; [json.loads(l) for l in sys.stdin if l.strip()]' || fail "load error leaked to stdout: $resp"
+printf '%s' "$resp" | python3 -c 'import sys,json; assert json.load(sys.stdin)["result"]["isError"]' || fail "corrupt file should be an error result: $resp"

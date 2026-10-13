@@ -16,6 +16,7 @@
 #include "base/disable_copying.h"
 #include "base/time.h"
 
+#include <cstddef>
 #include <mutex>
 #include <optional>
 #include <string>
@@ -31,9 +32,9 @@ class Engine;
 namespace mcp {
 
 // Shared state for tool execution: the script engine that runs Lua
-// snippets, the app context used to open documents, and the file name
-// plus modification time of the last document opened (used to detect
-// external changes).
+// snippets, the app context used to open documents, and the file name,
+// modification time, and size of the last document opened (used to
+// detect external changes).
 class ToolContext {
 public:
   static ToolContext& instance();
@@ -58,10 +59,11 @@ private:
   Context* m_context = nullptr;
   std::mutex m_mutex;
 
-  // File name and modification time of the last document opened by
-  // openDocument(), used to detect external changes.
+  // File name, modification time, and size of the last document
+  // opened by openDocument(), used to detect external changes.
   std::string m_cachedFilename;
   std::optional<base::Time> m_cachedTime;
+  std::size_t m_cachedSize = 0;
 };
 
 } // namespace mcp

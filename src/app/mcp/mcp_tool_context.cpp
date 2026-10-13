@@ -66,14 +66,17 @@ bool ToolContext::openDocument(const std::string& filename, std::string& error)
     return false;
   }
   const base::Time fileTime = base::get_modification_time(absFn);
+  const size_t fileSize = base::file_size(absFn);
 
   // A document left open by an earlier tool call is reused as-is when
   // it has unsaved changes; otherwise it is only reusable when its
   // file hasn't changed on disk (a stale document is dropped so the
-  // reload below doesn't resurrect it).
+  // reload below doesn't resurrect it). The size is compared too
+  // because the modification time is only second-granular.
   if (Doc* doc = m_context->documents().getByFileName(absFn)) {
     if (doc->isModified() ||
-        (m_cachedFilename == absFn && m_cachedTime && *m_cachedTime == fileTime)) {
+        (m_cachedFilename == absFn && m_cachedTime && *m_cachedTime == fileTime &&
+         m_cachedSize == fileSize)) {
       m_context->setActiveDocument(doc);
       return true;
     }
@@ -106,6 +109,7 @@ bool ToolContext::openDocument(const std::string& filename, std::string& error)
 
   m_cachedFilename = absFn;
   m_cachedTime = fileTime;
+  m_cachedSize = fileSize;
   return true;
 }
 
