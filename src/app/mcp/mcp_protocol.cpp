@@ -127,6 +127,30 @@ json11::Json handleToolsList(const json11::Json& id, const Era era)
   return makeResultForEra(id, era, { { "tools", tools } });
 }
 
+// Renders a tool result; "isError" marks a tool execution error while
+// the JSON-RPC envelope stays successful.
+json11::Json toolResultJson(const json11::Json& id, const Era era, const ToolResult& toolResult)
+{
+  json11::Json::array content;
+  if (!toolResult.text.empty()) {
+    content.push_back(json11::Json::object {
+      { "type", "text" },
+      { "text", toolResult.text },
+    });
+  }
+  if (!toolResult.imageBase64.empty()) {
+    content.push_back(json11::Json::object {
+      { "type", "image" },
+      { "data", toolResult.imageBase64 },
+      { "mimeType", toolResult.imageMime },
+    });
+  }
+  return makeResultForEra(id, era, {
+    { "content", content },
+    { "isError", toolResult.isError },
+  });
+}
+
 json11::Json handleToolsCall(const json11::Json& id, const Era era,
                              const json11::Json& params)
 {
@@ -135,25 +159,21 @@ json11::Json handleToolsCall(const json11::Json& id, const Era era,
     if (tool.name != name)
       continue;
 
-    const ToolResult toolResult = tool.run(params["arguments"]);
-    json11::Json::array content;
-    if (!toolResult.text.empty()) {
-      content.push_back(json11::Json::object {
-        { "type", "text" },
-        { "text", toolResult.text },
-      });
+    const json11::Json& arguments = params["arguments"];
+
+    // MCP input validation: a required argument that is missing or
+    // null makes the call a tool execution error, not a protocol
+    // error. Only presence is checked here, never the value type.
+    for (const json11::Json& required : tool.inputSchema["required"].array_items()) {
+      if (required.is_string() && arguments[required.string_value()].is_null()) {
+        ToolResult result;
+        result.isError = true;
+        result.text = "Missing required argument: " + required.string_value();
+        return toolResultJson(id, era, result);
+      }
     }
-    if (!toolResult.imageBase64.empty()) {
-      content.push_back(json11::Json::object {
-        { "type", "image" },
-        { "data", toolResult.imageBase64 },
-        { "mimeType", toolResult.imageMime },
-      });
-    }
-    return makeResultForEra(id, era, {
-      { "content", content },
-      { "isError", toolResult.isError },
-    });
+
+    return toolResultJson(id, era, tool.run(arguments));
   }
   return makeError(id, -32602, "Unknown tool: " + name);
 }
