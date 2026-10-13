@@ -153,3 +153,71 @@ resp=$(run_tool '{"jsonrpc":"2.0","id":45,"method":"tools/call","params":{"name"
 printf '%s' "$resp" | python3 -c 'import sys,json; t=json.load(sys.stdin)["result"]["content"][0]["text"]; r=json.loads(t); assert r["frames"] == 3, repr(t); assert r["range"] == {"start":1,"end":3}, repr(t); assert r["missing_layers"] == [] and r["missing_cels"] == [], repr(t)' || fail "validate_scene: $resp"
 resp=$(run_tool '{"jsonrpc":"2.0","id":46,"method":"tools/call","params":{"name":"add_frames","arguments":{"filename":"'$t'/anim.aseprite","count":0},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}')
 printf '%s' "$resp" | python3 -c 'import sys,json; r=json.load(sys.stdin)["result"]; assert r["isError"], repr(r); assert "Count must be >= 1" in r["content"][0]["text"], repr(r)' || fail "add_frames count validation: $resp"
+
+echo "MCP tools: palette tools"
+run_tool '{"jsonrpc":"2.0","id":50,"method":"tools/call","params":{"name":"create_canvas","arguments":{"width":8,"height":8,"filename":"'$t'/pal.aseprite"},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}' >/dev/null
+run_tool '{"jsonrpc":"2.0","id":51,"method":"tools/call","params":{"name":"draw_pixels_at","arguments":{"filename":"'$t'/pal.aseprite","layer_name":"Layer 1","frame_index":1,"pixels":[{"x":1,"y":1,"color":"#123456"}]},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}' >/dev/null
+resp=$(run_tool '{"jsonrpc":"2.0","id":52,"method":"tools/call","params":{"name":"set_palette","arguments":{"filename":"'$t'/pal.aseprite","colors":["#000000","#FFFFFF"]},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}')
+printf '%s' "$resp" | grep -q '"isError":false' || fail "set_palette: $resp"
+resp=$(run_tool '{"jsonrpc":"2.0","id":53,"method":"tools/call","params":{"name":"get_palette","arguments":{"filename":"'$t'/pal.aseprite"},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}')
+printf '%s' "$resp" | python3 -c 'import sys,json; t=json.load(sys.stdin)["result"]["content"][0]["text"]; assert json.loads(t) == ["#000000","#FFFFFF"], repr(t)' || fail "get_palette round-trip: $resp"
+resp=$(run_tool '{"jsonrpc":"2.0","id":54,"method":"tools/call","params":{"name":"quantize_to_palette","arguments":{"filename":"'$t'/pal.aseprite"},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}')
+printf '%s' "$resp" | grep -q '"isError":false' || fail "quantize_to_palette: $resp"
+resp=$(run_tool '{"jsonrpc":"2.0","id":55,"method":"tools/call","params":{"name":"get_pixel_color","arguments":{"filename":"'$t'/pal.aseprite","x":1,"y":1},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}')
+printf '%s' "$resp" | python3 -c 'import sys,json; t=json.load(sys.stdin)["result"]["content"][0]["text"]; assert t.startswith("#000000"), repr(t)' || fail "quantized pixel: $resp"
+resp=$(run_tool '{"jsonrpc":"2.0","id":56,"method":"tools/call","params":{"name":"remap_colors_in_cel_range","arguments":{"filename":"'$t'/pal.aseprite","layer_name":"Layer 1","start_frame":1,"end_frame":1,"mappings":[{"from":"#000000","to":"#FF00FF"}]},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}')
+printf '%s' "$resp" | grep -q '"isError":false' || fail "remap_colors_in_cel_range: $resp"
+resp=$(run_tool '{"jsonrpc":"2.0","id":57,"method":"tools/call","params":{"name":"get_pixel_color","arguments":{"filename":"'$t'/pal.aseprite","x":1,"y":1},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}')
+printf '%s' "$resp" | python3 -c 'import sys,json; t=json.load(sys.stdin)["result"]["content"][0]["text"]; assert t.startswith("#ff00ff"), repr(t)' || fail "remapped pixel: $resp"
+resp=$(run_tool '{"jsonrpc":"2.0","id":58,"method":"tools/call","params":{"name":"apply_palette_preset","arguments":{"filename":"'$t'/pal.aseprite","preset":"gameboy"},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}')
+printf '%s' "$resp" | grep -q '"isError":false' || fail "apply_palette_preset: $resp"
+resp=$(run_tool '{"jsonrpc":"2.0","id":59,"method":"tools/call","params":{"name":"get_palette","arguments":{"filename":"'$t'/pal.aseprite"},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}')
+printf '%s' "$resp" | python3 -c 'import sys,json; t=json.load(sys.stdin)["result"]["content"][0]["text"]; assert json.loads(t) == ["#0F380F","#306230","#8BAC0F","#9BBC0F"], repr(t)' || fail "palette preset colors: $resp"
+resp=$(run_tool '{"jsonrpc":"2.0","id":60,"method":"tools/call","params":{"name":"list_palette_presets","arguments":{},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}')
+printf '%s' "$resp" | python3 -c 'import sys,json; t=json.load(sys.stdin)["result"]["content"][0]["text"]; p=json.loads(t); assert len(p["gameboy"]) == 4 and "dawnbringer16" in p, repr(t)' || fail "list_palette_presets: $resp"
+resp=$(run_tool '{"jsonrpc":"2.0","id":61,"method":"tools/call","params":{"name":"generate_color_ramp","arguments":{"base_color":"#D04648","steps":5},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}')
+printf '%s' "$resp" | python3 -c 'import sys,json,re; t=json.load(sys.stdin)["result"]["content"][0]["text"]; r=json.loads(t); assert len(r) == 5 and all(re.fullmatch(r"#[0-9A-F]{6}", c) for c in r), repr(t)' || fail "generate_color_ramp: $resp"
+resp=$(run_tool '{"jsonrpc":"2.0","id":62,"method":"tools/call","params":{"name":"set_color_mode","arguments":{"filename":"'$t'/pal.aseprite","mode":"indexed"},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}')
+printf '%s' "$resp" | grep -q '"isError":false' || fail "set_color_mode indexed: $resp"
+resp=$(run_tool '{"jsonrpc":"2.0","id":63,"method":"tools/call","params":{"name":"set_color_mode","arguments":{"filename":"'$t'/pal.aseprite","mode":"rgb"},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}')
+printf '%s' "$resp" | grep -q '"isError":false' || fail "set_color_mode rgb: $resp"
+
+echo "MCP tools: slice tools"
+resp=$(run_tool '{"jsonrpc":"2.0","id":64,"method":"tools/call","params":{"name":"create_slice","arguments":{"filename":"'$t'/pal.aseprite","name":"button","x":1,"y":2,"width":4,"height":3},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}')
+printf '%s' "$resp" | grep -q '"isError":false' || fail "create_slice: $resp"
+resp=$(run_tool '{"jsonrpc":"2.0","id":65,"method":"tools/call","params":{"name":"set_slice_center","arguments":{"filename":"'$t'/pal.aseprite","name":"button","x":1,"y":1,"width":2,"height":1},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}')
+printf '%s' "$resp" | grep -q '"isError":false' || fail "set_slice_center: $resp"
+resp=$(run_tool '{"jsonrpc":"2.0","id":66,"method":"tools/call","params":{"name":"set_slice_pivot","arguments":{"filename":"'$t'/pal.aseprite","name":"button","x":3,"y":2},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}')
+printf '%s' "$resp" | grep -q '"isError":false' || fail "set_slice_pivot: $resp"
+resp=$(run_tool '{"jsonrpc":"2.0","id":67,"method":"tools/call","params":{"name":"list_slices","arguments":{"filename":"'$t'/pal.aseprite"},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}')
+printf '%s' "$resp" | python3 -c 'import sys,json; t=json.load(sys.stdin)["result"]["content"][0]["text"]; s=json.loads(t); assert len(s) == 1, repr(t); assert s[0] == {"name":"button","x":1,"y":2,"width":4,"height":3,"center":{"x":1,"y":1,"width":2,"height":1},"pivot":{"x":3,"y":2}}, repr(t)' || fail "list_slices: $resp"
+resp=$(run_tool '{"jsonrpc":"2.0","id":68,"method":"tools/call","params":{"name":"delete_slice","arguments":{"filename":"'$t'/pal.aseprite","name":"button"},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}')
+printf '%s' "$resp" | grep -q '"isError":false' || fail "delete_slice: $resp"
+resp=$(run_tool '{"jsonrpc":"2.0","id":69,"method":"tools/call","params":{"name":"list_slices","arguments":{"filename":"'$t'/pal.aseprite"},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}')
+printf '%s' "$resp" | python3 -c 'import sys,json; t=json.load(sys.stdin)["result"]["content"][0]["text"]; assert json.loads(t) == [], repr(t)' || fail "deleted slice list: $resp"
+
+echo "MCP tools: tilemap tools"
+run_tool '{"jsonrpc":"2.0","id":70,"method":"tools/call","params":{"name":"create_canvas","arguments":{"width":8,"height":8,"filename":"'$t'/tile.aseprite"},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}' >/dev/null
+resp=$(run_tool '{"jsonrpc":"2.0","id":71,"method":"tools/call","params":{"name":"create_tilemap_layer","arguments":{"filename":"'$t'/tile.aseprite","layer_name":"terrain","tile_width":4,"tile_height":4},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}')
+printf '%s' "$resp" | grep -q '"isError":false' || fail "create_tilemap_layer: $resp"
+resp=$(run_tool '{"jsonrpc":"2.0","id":72,"method":"tools/call","params":{"name":"get_tilemap_info","arguments":{"filename":"'$t'/tile.aseprite","layer_name":"terrain"},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}')
+printf '%s' "$resp" | python3 -c 'import sys,json; t=json.load(sys.stdin)["result"]["content"][0]["text"]; assert json.loads(t) == {"tile_width":4,"tile_height":4,"tile_count":0,"map_cols":2,"map_rows":2}, repr(t)' || fail "get_tilemap_info: $resp"
+resp=$(run_tool '{"jsonrpc":"2.0","id":73,"method":"tools/call","params":{"name":"draw_on_tile","arguments":{"filename":"'$t'/tile.aseprite","layer_name":"terrain","tile_index":1,"pixels":[{"x":0,"y":0,"color":"#FF0000"}]},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}')
+printf '%s' "$resp" | grep -q '"isError":false' || fail "draw_on_tile: $resp"
+resp=$(run_tool '{"jsonrpc":"2.0","id":74,"method":"tools/call","params":{"name":"get_tilemap_info","arguments":{"filename":"'$t'/tile.aseprite","layer_name":"terrain"},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}')
+printf '%s' "$resp" | python3 -c 'import sys,json; t=json.load(sys.stdin)["result"]["content"][0]["text"]; assert json.loads(t)["tile_count"] == 1, repr(t)' || fail "tile appended: $resp"
+resp=$(run_tool '{"jsonrpc":"2.0","id":75,"method":"tools/call","params":{"name":"set_tiles","arguments":{"filename":"'$t'/tile.aseprite","layer_name":"terrain","frame_index":1,"tiles":[{"col":0,"row":0,"tile_index":1},{"col":1,"row":0,"tile_index":0}]},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}')
+printf '%s' "$resp" | grep -q '"isError":false' || fail "set_tiles: $resp"
+resp=$(run_tool '{"jsonrpc":"2.0","id":76,"method":"tools/call","params":{"name":"get_tile_at","arguments":{"filename":"'$t'/tile.aseprite","layer_name":"terrain","frame_index":1,"col":0,"row":0},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}')
+printf '%s' "$resp" | python3 -c 'import sys,json; t=json.load(sys.stdin)["result"]["content"][0]["text"]; assert json.loads(t) == {"col":0,"row":0,"tile_index":1}, repr(t)' || fail "get_tile_at: $resp"
+resp=$(run_tool '{"jsonrpc":"2.0","id":77,"method":"tools/call","params":{"name":"get_tile_at","arguments":{"filename":"'$t'/tile.aseprite","layer_name":"terrain","frame_index":1,"col":1,"row":0},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}')
+printf '%s' "$resp" | python3 -c 'import sys,json; t=json.load(sys.stdin)["result"]["content"][0]["text"]; assert json.loads(t)["tile_index"] == 0, repr(t)' || fail "get_tile_at empty cell: $resp"
+
+echo "MCP tools: copy layers between sprites"
+run_tool '{"jsonrpc":"2.0","id":78,"method":"tools/call","params":{"name":"create_canvas","arguments":{"width":8,"height":8,"filename":"'$t'/scene.aseprite"},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}' >/dev/null
+resp=$(run_tool '{"jsonrpc":"2.0","id":79,"method":"tools/call","params":{"name":"copy_layers_between_sprites","arguments":{"source_filename":"'$t'/c.aseprite","target_filename":"'$t'/scene.aseprite","layer_names":["paint"]},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}')
+printf '%s' "$resp" | grep -q '"isError":false' || fail "copy_layers_between_sprites: $resp"
+resp=$(run_tool '{"jsonrpc":"2.0","id":80,"method":"tools/call","params":{"name":"get_sprite_info","arguments":{"filename":"'$t'/scene.aseprite"},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}')
+printf '%s' "$resp" | python3 -c 'import sys,json; t=json.load(sys.stdin)["result"]["content"][0]["text"]; names=[l["name"] for l in json.loads(t)["layers"]]; assert "paint" in names, repr(t)' || fail "copied layer list: $resp"
+resp=$(run_tool '{"jsonrpc":"2.0","id":81,"method":"tools/call","params":{"name":"copy_layers_between_sprites","arguments":{"source_filename":"'$t'/c.aseprite","target_filename":"'$t'/scene.aseprite","layer_names":["paint","NOPE"]},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}')
+printf '%s' "$resp" | python3 -c 'import sys,json; r=json.load(sys.stdin)["result"]; t=r["content"][0]["text"]; assert not r["isError"], repr(r); assert "NOPE" in t, repr(t)' || fail "copy reports skipped layers: $resp"
