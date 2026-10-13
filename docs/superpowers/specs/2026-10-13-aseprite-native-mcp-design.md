@@ -13,7 +13,7 @@ Success criteria:
 
 1. An MCP client configured with `{ "command": "<aseprite>", "args": ["--mcp"] }` can discover and call tools without any external runtime.
 2. A running Aseprite with the HTTP server enabled answers MCP requests at `http://127.0.0.1:<port>/mcp`, with edits visible live in the app.
-3. The full diivi tool set is available (the 104 registered tools across 17 categories).
+3. The full diivi tool set is available (the complete registered tool set of the reference server: 116 tools at pin `90d1696a7e41edff89bbd0823ae6a5f86c114bcc`; the README's "104" is stale).
 4. The dialog lets a user enable/configure both transports and copy working client snippets.
 
 ## 2. Background
@@ -32,7 +32,7 @@ Success criteria:
 - Native dual-era MCP protocol core (tools capability only).
 - stdio transport: `aseprite --mcp` (headless process mode).
 - Streamable HTTP transport: POST `/mcp` endpoint; GUI mode (toggleable) and headless mode (`--mcp-http=PORT`).
-- Full diivi tool parity: all 104 registered tools, diivi-compatible names and argument shapes.
+- Full diivi tool parity: all registered tools of the reference server (116 at pinned commit `90d1696a7e41edff89bbd0823ae6a5f86c114bcc`), diivi-compatible names and argument shapes.
 - Native font stack for `list_text_fonts` / `measure_text` / `draw_text`.
 - Image content results for export tools (visual feedback loop).
 - Preview file-serving tools.
@@ -197,7 +197,7 @@ Modern results include `_meta.io.modelcontextprotocol/serverInfo`. Legacy result
 
 ### Tool extraction step (first task of the implementation plan)
 
-Enumerate every tool registered by diivi's server (its `tools/*.py` modules), capturing name, description intent, and input schema. Produce a mapping checklist: tool → handler kind → target file. Schemas are mirrored for compatibility; handler code and descriptions are written fresh against Aseprite's documented Lua API — no verbatim copying (diivi is MIT, this build ships under the Aseprite EULA; license hygiene).
+Enumerate every registered tool of the reference server at pinned commit `90d1696a7e41edff89bbd0823ae6a5f86c114bcc` (20 modules under `aseprite_mcp/tools/`, 116 `@mcp.tool` registrations). For each: capture name, description intent, and input schema. Produce a mapping checklist: tool → handler kind → target file. Schemas are mirrored for compatibility; handler code and descriptions are written fresh against Aseprite's documented Lua API — no verbatim copying (diivi is MIT, this build ships under the Aseprite EULA; license hygiene).
 
 ### Document management
 
@@ -209,7 +209,7 @@ Enumerate every tool registered by diivi's server (its `tools/*.py` modules), ca
 
 ### Fonts (`mcp_fonts`)
 
-- Font discovery directory: `~/.aseprite-mcp/fonts` (drop-in compatible with diivi setups).
+- Font discovery directory: `~/.aseprite-mcp/fonts` (drop-in compatible with diivi setups), overridable via the `ASEPRITE_MCP_FONTS` environment variable (used by tests).
   - Bitmap fonts: a directory with `font.json` + sheet PNGs (same format: sheets, per-sheet ascent, origin, ink rule, advance mode, overrides).
   - TrueType/OpenType: bare `.ttf`/`.otf` files, rendered with the bundled FreeType, no antialiasing by default.
 - `list_text_fonts` also enumerates system font files; v1 uses CoreText on macOS; other platforms list the fonts directory only (documented limitation in the tool description).
