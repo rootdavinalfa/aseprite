@@ -7,9 +7,11 @@ echo "$resp" | grep -q '"supportedVersions":\["2026-07-28"\]' || fail "discover 
 echo "$resp" | grep -q '"resultType":"complete"' || fail "discover resultType: $resp"
 echo "$resp" | grep -q '"io.modelcontextprotocol/serverInfo"' || fail "discover serverInfo: $resp"
 
-echo "MCP stdio: tools/list is empty"
+echo "MCP stdio: tools/list carries the registered tools"
 resp=$(printf '%s\n' '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}' | "$ASEPRITE" --mcp)
-echo "$resp" | grep -q '"tools":\[\]' || fail "empty tools list: $resp"
+echo "$resp" | grep -q '"name":"create_canvas"' || fail "tools list create_canvas: $resp"
+echo "$resp" | grep -q '"name":"get_sprite_info"' || fail "tools list get_sprite_info: $resp"
+echo "$resp" | grep -q '"name":"run_lua_script"' || fail "tools list run_lua_script: $resp"
 
 echo "MCP stdio: junk line -> -32700"
 resp=$(printf '%s\n' 'not json' | "$ASEPRITE" --mcp)

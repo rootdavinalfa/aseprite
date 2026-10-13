@@ -11,6 +11,7 @@
 #include "app/mcp/mcp_server.h"
 
 #include "app/mcp/mcp_protocol.h"
+#include "app/mcp/mcp_tool_context.h"
 
 #include <iostream>
 #include <string>
@@ -26,9 +27,8 @@ McpServer* McpServer::instance()
 
 void McpServer::runStdio(script::Engine& engine, Context& context)
 {
-  // Not used until tools are registered.
-  (void)engine;
-  (void)context;
+  ToolContext::instance().setEngine(&engine);
+  ToolContext::instance().setContext(&context);
 
   // Safety net: stdout carries nothing but MCP messages, so any stray
   // std::cout write during the loop is redirected to stderr.

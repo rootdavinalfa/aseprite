@@ -10,12 +10,100 @@
 
 #include "app/mcp/mcp_tools_registry.h"
 
+#include "app/mcp/mcp_tool_context.h"
+
 namespace app {
 namespace mcp {
 
+std::string argString(const json11::Json& args, const char* name, const std::string& def)
+{
+  const json11::Json& value = args[name];
+  return value.is_string() ? value.string_value() : def;
+}
+
+int argInt(const json11::Json& args, const char* name, int def)
+{
+  const json11::Json& value = args[name];
+  return value.is_number() ? value.int_value() : def;
+}
+
+bool argBool(const json11::Json& args, const char* name, bool def)
+{
+  const json11::Json& value = args[name];
+  return value.is_bool() ? value.bool_value() : def;
+}
+
+std::string luaString(const std::string& value)
+{
+  std::string out;
+  out.reserve(value.size());
+  for (const char c : value) {
+    switch (c) {
+      case '\\': out += "\\\\"; break;
+      case '"': out += "\\\""; break;
+      case '\n': out += "\\n"; break;
+      case '\r': out += "\\r"; break;
+      case '\0': out += "\\0"; break;
+      default: out.push_back(c); break;
+    }
+  }
+  return out;
+}
+
+McpTool LuaTool(std::string name,
+                std::string description,
+                json11::Json inputSchema,
+                const bool openFilename,
+                std::function<std::string(const json11::Json&)> buildScript)
+{
+  McpTool tool;
+  tool.name = std::move(name);
+  tool.description = std::move(description);
+  tool.inputSchema = std::move(inputSchema);
+  tool.run = [openFilename, buildScript](const json11::Json& args) -> ToolResult {
+    if (openFilename) {
+      const std::string filename = argString(args, "filename");
+      if (!filename.empty()) {
+        ToolContext& context = ToolContext::instance();
+        std::string error;
+        if (!context.openDocument(filename, error)) {
+          ToolResult result;
+          result.isError = true;
+          result.text = error;
+          return result;
+        }
+      }
+    }
+    return ToolContext::instance().runLua(buildScript(args));
+  };
+  return tool;
+}
+
+McpTool NativeTool(std::string name,
+                   std::string description,
+                   json11::Json inputSchema,
+                   std::function<ToolResult(const json11::Json&)> fn)
+{
+  McpTool tool;
+  tool.name = std::move(name);
+  tool.description = std::move(description);
+  tool.inputSchema = std::move(inputSchema);
+  tool.run = std::move(fn);
+  return tool;
+}
+
 const std::vector<McpTool>& mcp_tools()
 {
-  static const std::vector<McpTool> tools;
+  static const std::vector<McpTool> tools = [] {
+    std::vector<McpTool> list;
+    register_canvas_draw_tools(list);
+    register_layers_tools(list);
+    register_animation_tools(list);
+    register_palette_transform_tools(list);
+    register_io_tools(list);
+    register_misc_tools(list);
+    return list;
+  }();
   return tools;
 }
 

@@ -198,6 +198,14 @@ if(ENABLE_SCRIPTING)
     mcp/mcp_protocol.h
     mcp/mcp_server.cpp
     mcp/mcp_server.h
+    mcp/mcp_tool_context.cpp
+    mcp/mcp_tool_context.h
+    mcp/mcp_tools_animation.cpp
+    mcp/mcp_tools_canvas_draw.cpp
+    mcp/mcp_tools_io.cpp
+    mcp/mcp_tools_layers.cpp
+    mcp/mcp_tools_misc.cpp
+    mcp/mcp_tools_palette_transform.cpp
     mcp/mcp_tools_registry.cpp
     mcp/mcp_tools_registry.h
     script/app_command_object.cpp
