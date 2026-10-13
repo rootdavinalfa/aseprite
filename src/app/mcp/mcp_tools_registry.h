@@ -53,7 +53,12 @@ McpTool NativeTool(std::string name,
 
 std::string argString(const json11::Json& args, const char* name, const std::string& def = {});
 int argInt(const json11::Json& args, const char* name, int def = 0);
+double argDouble(const json11::Json& args, const char* name, double def = 0.0);
 bool argBool(const json11::Json& args, const char* name, bool def = false);
+
+// Accepts #RGB, #RGBA, #RRGGBB, or #RRGGBBAA (the leading # is
+// optional) and fills r, g, b, a. Returns false on malformed input.
+bool parseHexColor(const std::string& value, int& r, int& g, int& b, int& a);
 
 // Escapes a string for use inside a Lua double-quoted literal.
 std::string luaString(const std::string& value);

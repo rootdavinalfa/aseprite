@@ -11,93 +11,12 @@
 #include "app/mcp/mcp_tools_lua.h"
 #include "app/mcp/mcp_tools_registry.h"
 
-#include <cctype>
 #include <string>
 
 namespace app {
 namespace mcp {
 
 namespace {
-
-// Makes the cel of a layer/frame canvas-sized and anchored at (0,0),
-// creating it on demand, so drawing code can use sprite-global
-// coordinates directly.
-const char kNormalizeCelFn[] =
-  "local function normalize_cel(spr, layer, frame, create)\n"
-  "  local cel = layer:cel(frame)\n"
-  "  if not cel then\n"
-  "    if not create then return nil end\n"
-  "    local img = Image(spr.width, spr.height, spr.colorMode)\n"
-  "    return spr:newCel(layer, frame, img, Point(0, 0))\n"
-  "  end\n"
-  "  if cel.position.x == 0 and cel.position.y == 0 and\n"
-  "     cel.image.width == spr.width and cel.image.height == spr.height then\n"
-  "    return cel\n"
-  "  end\n"
-  "  local img = Image(spr.width, spr.height, spr.colorMode)\n"
-  "  img:drawImage(cel.image, cel.position)\n"
-  "  cel.image = img\n"
-  "  cel.position = Point(0, 0)\n"
-  "  return cel\n"
-  "end\n";
-
-// putPixel that ignores out-of-bounds coordinates.
-const char kPSet[] =
-  "local function pset(img, x, y, color)\n"
-  "  if x >= 0 and y >= 0 and x < img.width and y < img.height then\n"
-  "    img:putPixel(x, y, color)\n"
-  "  end\n"
-  "end\n";
-
-// Sprite guard shared by the scripts below.
-const char kSpritePrelude[] =
-  "local spr = app.activeSprite\n"
-  "if not spr then print(\"ERROR:No active sprite\") return end\n";
-
-// Accepts #RGB, #RGBA, #RRGGBB, or #RRGGBBAA (the leading # is
-// optional) and fills r, g, b, a. Returns false on malformed input.
-bool parseHexColor(const std::string& value, int& r, int& g, int& b, int& a)
-{
-  std::string hex;
-  for (const char c : value) {
-    if (c != ' ' && c != '\t' && c != '\n' && c != '\r')
-      hex.push_back(c);
-  }
-  if (!hex.empty() && hex[0] == '#')
-    hex.erase(0, 1);
-
-  // The four hex digits of an 8-bit channel, doubled from a short form.
-  std::string full;
-  if (hex.size() == 3 || hex.size() == 4) {
-    for (const char c : hex) {
-      full.push_back(c);
-      full.push_back(c);
-    }
-  }
-  else {
-    full = hex;
-  }
-  if (full.size() != 6 && full.size() != 8)
-    return false;
-
-  int* channels[4] = { &r, &g, &b, &a };
-  for (int i = 0; i < 4; ++i) {
-    if (i == 3 && full.size() == 6) {
-      *channels[i] = 255;
-      continue;
-    }
-    const int last = i * 2 + 2;
-    int v = 0;
-    for (int j = i * 2; j < last; ++j) {
-      if (!std::isxdigit(static_cast<unsigned char>(full[j])))
-        return false;
-      v = v * 16 + (std::isdigit(static_cast<unsigned char>(full[j])) ? full[j] - '0' :
-                   std::tolower(static_cast<unsigned char>(full[j])) - 'a' + 10);
-    }
-    *channels[i] = v;
-  }
-  return true;
-}
 
 // Reads the "pixels" argument: an array of {x, y, color} objects.
 // Returns false (and fills "error") when a color is malformed.
@@ -161,7 +80,7 @@ std::string layerFrameCel(const std::string& layerName,
 {
   return frameIndexCheck(frameIndex) +
          kFindLayerLua +
-         kNormalizeCelFn +
+         kNormalizeCelLua +
          "local target = find_layer(spr, \"" + luaString(layerName) + "\")\n"
          "if not target then print(\"ERROR:Layer not found\") return end\n"
          "\n"
@@ -307,7 +226,7 @@ void register_canvas_draw_tools(std::vector<McpTool>& tools)
       if (layerName.empty())
         return std::string("print(\"ERROR:Layer name cannot be empty\")");
 
-      std::string script = kSpritePrelude;
+      std::string script = kSpritePreludeLua;
       script += kFindLayerLua;
       script += "local parent = nil\n"
                 "if \"" + luaString(group) + "\" ~= \"\" then\n"
@@ -354,7 +273,7 @@ void register_canvas_draw_tools(std::vector<McpTool>& tools)
       if (groupName.empty())
         return std::string("print(\"ERROR:Group name cannot be empty\")");
 
-      std::string script = kSpritePrelude;
+      std::string script = kSpritePreludeLua;
       script += kFindLayerLua;
       script += "local parent = nil\n"
                 "if \"" + luaString(parentGroup) + "\" ~= \"\" then\n"
@@ -389,7 +308,7 @@ void register_canvas_draw_tools(std::vector<McpTool>& tools)
     },
     true,
     [](const json11::Json& args) -> std::string {
-      return std::string(kSpritePrelude) +
+      return std::string(kSpritePreludeLua) +
              "app.transaction(function()\n"
              "  spr:newFrame()\n"
              "end)\n"
@@ -415,7 +334,7 @@ void register_canvas_draw_tools(std::vector<McpTool>& tools)
     },
     true,
     [](const json11::Json& args) -> std::string {
-      return std::string(kSpritePrelude) +
+      return std::string(kSpritePreludeLua) +
              frameIndexCheck(argInt(args, "frame_index")) +
              "\n"
              "app.activeFrame = spr.frames[idx]\n"
@@ -448,7 +367,7 @@ void register_canvas_draw_tools(std::vector<McpTool>& tools)
       if (durationMs <= 0)
         return std::string("print(\"ERROR:Duration must be > 0\")");
 
-      return std::string(kSpritePrelude) +
+      return std::string(kSpritePreludeLua) +
              frameIndexCheck(argInt(args, "frame_index")) +
              "\n"
              "app.transaction(function()\n"
@@ -485,7 +404,7 @@ void register_canvas_draw_tools(std::vector<McpTool>& tools)
         return std::string("print(\"ERROR:Layer name cannot be empty\")");
 
       const bool create = argBool(args, "create_if_missing", false);
-      std::string script = kSpritePrelude;
+      std::string script = kSpritePreludeLua;
       script += kFindLayerLua;
       script += "local target = find_layer(spr, \"" + luaString(layerName) + "\")\n"
                 "if not target and " + (create ? "true" : "false") + " then\n"
@@ -533,7 +452,7 @@ void register_canvas_draw_tools(std::vector<McpTool>& tools)
       std::string body, color;
       if (!pixelLua(args["pixels"], true, false, body, color))
         return std::string("print(\"ERROR:Invalid color value: " + luaString(color) + "\")");
-      return std::string(kSpritePrelude) + kActiveCelStart + body + activeCelEnd();
+      return std::string(kSpritePreludeLua) + kActiveCelStart + body + activeCelEnd();
     }));
 
   tools.push_back(LuaTool(
@@ -570,8 +489,8 @@ void register_canvas_draw_tools(std::vector<McpTool>& tools)
         return std::string("print(\"ERROR:Invalid color value: " +
                            luaString(argString(args, "color")) + "\")");
 
-      return std::string(kSpritePrelude) +
-             kPSet +
+      return std::string(kSpritePreludeLua) +
+             kPSetLua +
              kDrawLineLua +
              kActiveCelStart +
              "  draw_line(img, " + std::to_string(argInt(args, "x1")) + " - cox, " +
@@ -630,7 +549,7 @@ void register_canvas_draw_tools(std::vector<McpTool>& tools)
       // app.useTool treats both points as inclusive corners.
       const std::string tool = shapeToolLua(argBool(args, "fill"),
                                             "\"rectangle\"", "\"filled_rectangle\"");
-      return std::string(kSpritePrelude) +
+      return std::string(kSpritePreludeLua) +
              kActiveCelStart +
              "  app.useTool({\n"
              "    tool = " + tool + ",\n"
@@ -669,7 +588,7 @@ void register_canvas_draw_tools(std::vector<McpTool>& tools)
         return std::string("print(\"ERROR:Invalid color value: " +
                            luaString(argString(args, "color")) + "\")");
 
-      return std::string(kSpritePrelude) +
+      return std::string(kSpritePreludeLua) +
              kActiveCelStart +
              "  app.useTool({\n"
              "    tool = \"paint_bucket\",\n"
@@ -720,7 +639,7 @@ void register_canvas_draw_tools(std::vector<McpTool>& tools)
 
       const std::string tool = shapeToolLua(argBool(args, "fill"),
                                             "\"ellipse\"", "\"filled_ellipse\"");
-      return std::string(kSpritePrelude) +
+      return std::string(kSpritePreludeLua) +
              kActiveCelStart +
              "  app.useTool({\n"
              "    tool = " + tool + ",\n"
@@ -774,8 +693,8 @@ void register_canvas_draw_tools(std::vector<McpTool>& tools)
       std::string body, color;
       if (!pixelLua(args["pixels"], false, true, body, color))
         return std::string("print(\"ERROR:Invalid color value: " + luaString(color) + "\")");
-      return std::string(kSpritePrelude) +
-             kPSet +
+      return std::string(kSpritePreludeLua) +
+             kPSetLua +
              layerFrameCel(argString(args, "layer_name"),
                            argInt(args, "frame_index"),
                            argBool(args, "create_if_missing", true)) +
@@ -826,8 +745,8 @@ void register_canvas_draw_tools(std::vector<McpTool>& tools)
         return std::string("print(\"ERROR:Invalid color value: " +
                            luaString(argString(args, "color")) + "\")");
 
-      return std::string(kSpritePrelude) +
-             kPSet +
+      return std::string(kSpritePreludeLua) +
+             kPSetLua +
              kDrawLineLua +
              layerFrameCel(argString(args, "layer_name"),
                            argInt(args, "frame_index"),
@@ -894,7 +813,7 @@ void register_canvas_draw_tools(std::vector<McpTool>& tools)
 
       const std::string tool = shapeToolLua(argBool(args, "fill"),
                                             "\"rectangle\"", "\"filled_rectangle\"");
-      return std::string(kSpritePrelude) +
+      return std::string(kSpritePreludeLua) +
              layerFrameCel(argString(args, "layer_name"),
                            argInt(args, "frame_index"),
                            argBool(args, "create_if_missing", true)) +
@@ -958,7 +877,7 @@ void register_canvas_draw_tools(std::vector<McpTool>& tools)
 
       const std::string tool = shapeToolLua(argBool(args, "fill"),
                                             "\"ellipse\"", "\"filled_ellipse\"");
-      return std::string(kSpritePrelude) +
+      return std::string(kSpritePreludeLua) +
              layerFrameCel(argString(args, "layer_name"),
                            argInt(args, "frame_index"),
                            argBool(args, "create_if_missing", true)) +
@@ -1010,7 +929,7 @@ void register_canvas_draw_tools(std::vector<McpTool>& tools)
         return std::string("print(\"ERROR:Invalid color value: " +
                            luaString(argString(args, "color")) + "\")");
 
-      return std::string(kSpritePrelude) +
+      return std::string(kSpritePreludeLua) +
              layerFrameCel(argString(args, "layer_name"),
                            argInt(args, "frame_index"),
                            argBool(args, "create_if_missing", true)) +
@@ -1075,8 +994,8 @@ void register_canvas_draw_tools(std::vector<McpTool>& tools)
         return std::string("print(\"ERROR:Invalid color value: " +
                            luaString(argString(args, "color")) + "\")");
 
-      return std::string(kSpritePrelude) +
-             kPSet +
+      return std::string(kSpritePreludeLua) +
+             kPSetLua +
              kDrawLineLua +
              // Scanline fill for the polygon interior.
              "local function fill_polygon(img, pts, color)\n"
@@ -1171,8 +1090,8 @@ void register_canvas_draw_tools(std::vector<McpTool>& tools)
         return std::string("print(\"ERROR:Invalid color value: " +
                            luaString(argString(args, "color")) + "\")");
 
-      return std::string(kSpritePrelude) +
-             kPSet +
+      return std::string(kSpritePreludeLua) +
+             kPSetLua +
              kDrawLineLua +
              layerFrameCel(argString(args, "layer_name"),
                            argInt(args, "frame_index"),
@@ -1246,8 +1165,8 @@ void register_canvas_draw_tools(std::vector<McpTool>& tools)
         return std::string("print(\"ERROR:Invalid color_end value: " +
                            luaString(argString(args, "color_end")) + "\")");
 
-      return std::string(kSpritePrelude) +
-             kPSet +
+      return std::string(kSpritePreludeLua) +
+             kPSetLua +
              layerFrameCel(argString(args, "layer_name"),
                            argInt(args, "frame_index"),
                            argBool(args, "create_if_missing", true)) +
@@ -1332,7 +1251,7 @@ void register_canvas_draw_tools(std::vector<McpTool>& tools)
 
       const std::string tool = shapeToolLua(argBool(args, "fill"),
                                             "\"ellipse\"", "\"filled_ellipse\"");
-      return std::string(kSpritePrelude) +
+      return std::string(kSpritePreludeLua) +
              layerFrameCel(argString(args, "layer_name"),
                            argInt(args, "frame_index"),
                            argBool(args, "create_if_missing", true)) +

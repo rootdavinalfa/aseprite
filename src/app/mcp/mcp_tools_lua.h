@@ -15,6 +15,11 @@
 namespace app {
 namespace mcp {
 
+// Requires an active sprite, leaving it in a local "spr".
+inline const char kSpritePreludeLua[] =
+  "local spr = app.activeSprite\n"
+  "if not spr then print(\"ERROR:No active sprite\") return end\n";
+
 // Resolves a layer by name, searching inside groups. An exact full-name
 // match is tried first, breadth-first; otherwise the name is read as a
 // "group/child" path whose segments are matched longest-prefix-first
@@ -52,6 +57,36 @@ inline const char kFindLayerLua[] =
   "    return nil\n"
   "  end\n"
   "  return resolve(spr.layers, 1)\n"
+  "end\n";
+
+// Makes the cel of a layer/frame canvas-sized and anchored at (0,0),
+// creating it on demand, so drawing code can use sprite-global
+// coordinates directly.
+inline const char kNormalizeCelLua[] =
+  "local function normalize_cel(spr, layer, frame, create)\n"
+  "  local cel = layer:cel(frame)\n"
+  "  if not cel then\n"
+  "    if not create then return nil end\n"
+  "    local img = Image(spr.width, spr.height, spr.colorMode)\n"
+  "    return spr:newCel(layer, frame, img, Point(0, 0))\n"
+  "  end\n"
+  "  if cel.position.x == 0 and cel.position.y == 0 and\n"
+  "     cel.image.width == spr.width and cel.image.height == spr.height then\n"
+  "    return cel\n"
+  "  end\n"
+  "  local img = Image(spr.width, spr.height, spr.colorMode)\n"
+  "  img:drawImage(cel.image, cel.position)\n"
+  "  cel.image = img\n"
+  "  cel.position = Point(0, 0)\n"
+  "  return cel\n"
+  "end\n";
+
+// putPixel that ignores out-of-bounds coordinates.
+inline const char kPSetLua[] =
+  "local function pset(img, x, y, color)\n"
+  "  if x >= 0 and y >= 0 and x < img.width and y < img.height then\n"
+  "    img:putPixel(x, y, color)\n"
+  "  end\n"
   "end\n";
 
 } // namespace mcp
