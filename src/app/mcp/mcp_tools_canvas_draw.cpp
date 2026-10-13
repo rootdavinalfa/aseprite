@@ -8,6 +8,7 @@
   #include "config.h"
 #endif
 
+#include "app/mcp/mcp_tools_lua.h"
 #include "app/mcp/mcp_tools_registry.h"
 
 #include <cctype>
@@ -17,43 +18,6 @@ namespace app {
 namespace mcp {
 
 namespace {
-
-// Resolves a layer by name, including layers nested inside groups and
-// "group/subgroup/child" paths with backtracking when a name itself
-// contains slashes.
-const char kFindLayer[] =
-  "local function find_layer(spr, name)\n"
-  "  local queue = {}\n"
-  "  for _, layer in ipairs(spr.layers) do queue[#queue + 1] = layer end\n"
-  "  local head = 1\n"
-  "  while head <= #queue do\n"
-  "    local layer = queue[head]\n"
-  "    head = head + 1\n"
-  "    if layer.name == name then return layer end\n"
-  "    if layer.isGroup then\n"
-  "      for _, child in ipairs(layer.layers) do queue[#queue + 1] = child end\n"
-  "    end\n"
-  "  end\n"
-  "  if not string.find(name, \"/\", 1, true) then return nil end\n"
-  "  local segs = {}\n"
-  "  for segment in string.gmatch(name, \"[^/]+\") do segs[#segs + 1] = segment end\n"
-  "  local function resolve(layers, i)\n"
-  "    for j = #segs, i, -1 do\n"
-  "      local cand = table.concat(segs, \"/\", i, j)\n"
-  "      for _, layer in ipairs(layers) do\n"
-  "        if layer.name == cand then\n"
-  "          if j == #segs then return layer end\n"
-  "          if layer.isGroup then\n"
-  "            local found = resolve(layer.layers, j + 1)\n"
-  "            if found then return found end\n"
-  "          end\n"
-  "        end\n"
-  "      end\n"
-  "    end\n"
-  "    return nil\n"
-  "  end\n"
-  "  return resolve(spr.layers, 1)\n"
-  "end\n";
 
 // Makes the cel of a layer/frame canvas-sized and anchored at (0,0),
 // creating it on demand, so drawing code can use sprite-global
@@ -196,7 +160,7 @@ std::string layerFrameCel(const std::string& layerName,
                           const bool createIfMissing)
 {
   return frameIndexCheck(frameIndex) +
-         kFindLayer +
+         kFindLayerLua +
          kNormalizeCelFn +
          "local target = find_layer(spr, \"" + luaString(layerName) + "\")\n"
          "if not target then print(\"ERROR:Layer not found\") return end\n"
@@ -344,7 +308,7 @@ void register_canvas_draw_tools(std::vector<McpTool>& tools)
         return std::string("print(\"ERROR:Layer name cannot be empty\")");
 
       std::string script = kSpritePrelude;
-      script += kFindLayer;
+      script += kFindLayerLua;
       script += "local parent = nil\n"
                 "if \"" + luaString(group) + "\" ~= \"\" then\n"
                 "  parent = find_layer(spr, \"" + luaString(group) + "\")\n"
@@ -391,7 +355,7 @@ void register_canvas_draw_tools(std::vector<McpTool>& tools)
         return std::string("print(\"ERROR:Group name cannot be empty\")");
 
       std::string script = kSpritePrelude;
-      script += kFindLayer;
+      script += kFindLayerLua;
       script += "local parent = nil\n"
                 "if \"" + luaString(parentGroup) + "\" ~= \"\" then\n"
                 "  parent = find_layer(spr, \"" + luaString(parentGroup) + "\")\n"
@@ -522,7 +486,7 @@ void register_canvas_draw_tools(std::vector<McpTool>& tools)
 
       const bool create = argBool(args, "create_if_missing", false);
       std::string script = kSpritePrelude;
-      script += kFindLayer;
+      script += kFindLayerLua;
       script += "local target = find_layer(spr, \"" + luaString(layerName) + "\")\n"
                 "if not target and " + (create ? "true" : "false") + " then\n"
                 "  target = spr:newLayer()\n"

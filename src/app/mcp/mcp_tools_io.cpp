@@ -8,6 +8,7 @@
   #include "config.h"
 #endif
 
+#include "app/mcp/mcp_tools_lua.h"
 #include "app/mcp/mcp_tools_registry.h"
 
 #include <string>
@@ -69,23 +70,8 @@ std::string readPixelScript(const std::string& layerName, const int frameIndex)
       "local ox, oy = cel.position.x, cel.position.y\n";
   }
   else {
-    script +=
-      "local function find_layer(spr, name)\n"
-      "  local queue = {}\n"
-      "  for _, layer in ipairs(spr.layers) do queue[#queue + 1] = layer end\n"
-      "  local head = 1\n"
-      "  while head <= #queue do\n"
-      "    local layer = queue[head]\n"
-      "    head = head + 1\n"
-      "    if layer.name == name then return layer end\n"
-      "    if layer.isGroup then\n"
-      "      for _, child in ipairs(layer.layers) do queue[#queue + 1] = child end\n"
-      "    end\n"
-      "  end\n"
-      "  return nil\n"
-      "end\n"
-      "\n"
-      "local target = find_layer(spr, \"" + luaString(layerName) + "\")\n"
+    script += std::string(kFindLayerLua) +
+              "local target = find_layer(spr, \"" + luaString(layerName) + "\")\n"
       "if not target then print(\"ERROR:Layer not found\") return end\n"
       "local cel = target:cel(spr.frames[idx])\n"
       "if not cel then print(\"ERROR:No cel at that layer/frame\") return end\n"
