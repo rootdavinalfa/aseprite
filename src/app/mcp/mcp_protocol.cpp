@@ -37,14 +37,18 @@ const char kInstructions[] =
   "draw with the drawing tools, inspect with export_frame at 8-10x scale, iterate. "
   "run_lua_script is the escape hatch.";
 
+json11::Json serverInfo()
+{
+  return json11::Json::object {
+    { "name", "aseprite" },
+    { "version", get_app_version() },
+  };
+}
+
 json11::Json serverMeta()
 {
   return json11::Json::object {
-    { "io.modelcontextprotocol/serverInfo",
-      json11::Json::object {
-        { "name", "aseprite" },
-        { "version", get_app_version() },
-      } },
+    { "io.modelcontextprotocol/serverInfo", serverInfo() },
   };
 }
 
@@ -57,19 +61,22 @@ json11::Json makeResult(const json11::Json& id, const json11::Json& result)
   };
 }
 
-// Adds the fields carried by every modern result.
-json11::Json makeModernResult(const json11::Json& id, json11::Json::object result)
+// Adds the fields carried by every modern result; legacy results
+// carry only the method payload.
+json11::Json makeResultForEra(const json11::Json& id, const Era era, json11::Json::object result)
 {
-  result["resultType"] = "complete";
-  result["ttlMs"] = kTtlMs;
-  result["cacheScope"] = kCacheScope;
-  result["_meta"] = serverMeta();
+  if (era == Era::Modern) {
+    result["resultType"] = "complete";
+    result["ttlMs"] = kTtlMs;
+    result["cacheScope"] = kCacheScope;
+    result["_meta"] = serverMeta();
+  }
   return makeResult(id, result);
 }
 
 json11::Json handleDiscover(const json11::Json& id)
 {
-  return makeModernResult(id, {
+  return makeResultForEra(id, Era::Modern, {
     { "supportedVersions", json11::Json::array { kModernVersion } },
     { "capabilities", json11::Json::object {
         { "tools", json11::Json::object {
@@ -80,7 +87,34 @@ json11::Json handleDiscover(const json11::Json& id)
   });
 }
 
-json11::Json handleToolsList(const json11::Json& id)
+bool isLegacyVersion(const std::string& version)
+{
+  for (const char* const supported : kLegacyVersions) {
+    if (version == supported)
+      return true;
+  }
+  return false;
+}
+
+// Legacy handshake: echo the requested version when supported,
+// otherwise reply with the fallback version.
+json11::Json handleInitialize(const json11::Json& id, const json11::Json& params)
+{
+  const std::string requested = params["protocolVersion"].string_value();
+  return makeResult(id, json11::Json::object {
+    { "protocolVersion", isLegacyVersion(requested)
+                           ? requested
+                           : std::string(kDefaultLegacyVersion) },
+    { "capabilities", json11::Json::object {
+        { "tools", json11::Json::object {
+            { "listChanged", false },
+        } },
+    } },
+    { "serverInfo", serverInfo() },
+  });
+}
+
+json11::Json handleToolsList(const json11::Json& id, const Era era)
 {
   json11::Json::array tools;
   for (const McpTool& tool : mcp_tools()) {
@@ -90,10 +124,11 @@ json11::Json handleToolsList(const json11::Json& id)
       { "inputSchema", tool.inputSchema },
     });
   }
-  return makeModernResult(id, { { "tools", tools } });
+  return makeResultForEra(id, era, { { "tools", tools } });
 }
 
-json11::Json handleToolsCall(const json11::Json& id, const json11::Json& params)
+json11::Json handleToolsCall(const json11::Json& id, const Era era,
+                             const json11::Json& params)
 {
   const std::string name = params["name"].string_value();
   for (const McpTool& tool : mcp_tools()) {
@@ -115,7 +150,7 @@ json11::Json handleToolsCall(const json11::Json& id, const json11::Json& params)
         { "mimeType", toolResult.imageMime },
       });
     }
-    return makeModernResult(id, {
+    return makeResultForEra(id, era, {
       { "content", content },
       { "isError", toolResult.isError },
     });
@@ -141,6 +176,11 @@ json11::Json handle(const json11::Json& request, const Era era)
 {
   if (!request.is_object())
     return makeError(json11::Json(), -32600, "Invalid Request");
+
+  // notifications/initialized is accepted (no reply required). A
+  // notifications/cancelled has nothing to cancel: tools are short and
+  // run to completion before the next message is read.
+  // ponytail: no mid-tool cancellation; revisit if long-running tools appear.
   if (isNotification(request))
     return json11::Json();
 
@@ -148,9 +188,13 @@ json11::Json handle(const json11::Json& request, const Era era)
   const std::string method = request["method"].string_value();
 
   if (method == "tools/list")
-    return handleToolsList(id);
+    return handleToolsList(id, era);
   if (method == "tools/call")
-    return handleToolsCall(id, request["params"]);
+    return handleToolsCall(id, era, request["params"]);
+  if (method == "initialize" && era == Era::Legacy)
+    return handleInitialize(id, request["params"]);
+  if (method == "ping" && era == Era::Legacy)
+    return makeResult(id, json11::Json::object {});
   if (method == "server/discover" && era == Era::Modern)
     return handleDiscover(id);
 
