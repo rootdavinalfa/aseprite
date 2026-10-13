@@ -8,10 +8,30 @@
   #include "config.h"
 #endif
 
+#include "app/mcp/mcp_fonts.h"
 #include "app/mcp/mcp_tools_lua.h"
 #include "app/mcp/mcp_tools_registry.h"
 
+#include "app/app.h"
+#include "app/commands/commands.h"
+#include "app/commands/params.h"
+#include "app/context.h"
+#include "app/doc.h"
+#include "app/doc_api.h"
+#include "app/mcp/mcp_tool_context.h"
+#include "app/tx.h"
+#include "base/fs.h"
+#include "doc/cel.h"
+#include "doc/image.h"
+#include "doc/image_ref.h"
+#include "doc/layer.h"
+#include "doc/primitives.h"
+#include "doc/sprite.h"
+
+#include <algorithm>
+#include <cstdlib>
 #include <string>
+#include <vector>
 
 namespace app {
 namespace mcp {
@@ -164,6 +184,468 @@ std::string activeCelEnd()
          "\n"
          "spr:saveAs(spr.filename)\n"
          "print(\"OK\")";
+}
+
+// ---------------------------------------------------------------------
+// Text tools: glyphs are rasterized natively (mcp_fonts) and
+// composited into the cel image, because the Lua API has no text.
+
+const char* const kTextAnchors[] = {
+  "topleft",      "top",       "topright",
+  "left",         "center",    "right",
+  "bottomleft",   "bottom",    "bottomright",
+  "baselineleft", "baseline",  "baselineright",
+};
+
+ToolResult toolError(const std::string& text)
+{
+  ToolResult result;
+  result.isError = true;
+  result.text = text;
+  return result;
+}
+
+bool isValidAnchor(const std::string& anchor)
+{
+  for (const char* candidate : kTextAnchors) {
+    if (anchor == candidate)
+      return true;
+  }
+  return false;
+}
+
+std::string joinSegments(const std::vector<std::string>& segments,
+                         const size_t from,
+                         const size_t to)
+{
+  std::string out;
+  for (size_t i = from; i <= to; ++i) {
+    if (i > from)
+      out += '/';
+    out += segments[i];
+  }
+  return out;
+}
+
+// The trailing "group/child" half of findLayerByName(): segments are
+// matched longest-first with backtracking, like find_layer() in
+// mcp_tools_lua.h.
+doc::Layer* resolveLayerPath(const doc::LayerList& layers,
+                             const std::vector<std::string>& segments,
+                             const size_t from)
+{
+  for (size_t j = segments.size(); j > from; --j) {
+    const std::string candidate = joinSegments(segments, from, j - 1);
+    for (doc::Layer* layer : layers) {
+      if (layer->name() != candidate)
+        continue;
+      if (j == segments.size())
+        return layer;
+      if (layer->isGroup()) {
+        if (doc::Layer* found = resolveLayerPath(layer->layers(), segments, j))
+          return found;
+      }
+    }
+  }
+  return nullptr;
+}
+
+// Finds a layer by name, searching inside groups: an exact full-name
+// match is tried first, breadth-first, like the Lua tools.
+doc::Layer* findLayerByName(doc::Sprite* sprite, const std::string& name)
+{
+  doc::Layer* root = sprite->root();
+  std::vector<doc::Layer*> queue(root->layers().begin(), root->layers().end());
+  for (size_t head = 0; head < queue.size(); ++head) {
+    doc::Layer* layer = queue[head];
+    if (layer->name() == name)
+      return layer;
+    if (layer->isGroup()) {
+      for (doc::Layer* child : layer->layers())
+        queue.push_back(child);
+    }
+  }
+
+  if (name.find('/') == std::string::npos)
+    return nullptr;
+
+  std::vector<std::string> segments;
+  size_t start = 0;
+  while (start < name.size()) {
+    size_t end = name.find('/', start);
+    if (end == std::string::npos)
+      end = name.size();
+    if (end > start)
+      segments.push_back(name.substr(start, end - start));
+    start = end + 1;
+  }
+  return resolveLayerPath(root->layers(), segments, 0);
+}
+
+// Maps an anchor point to the pen origin the glyph run starts from.
+// Ink runs from the pen origin on x and from the baseline on y, so the
+// baseline anchors need no vertical correction while the box anchors
+// are offset by the ink extents.
+gfx::Point textPenOrigin(const std::string& anchor,
+                         const int x,
+                         const int y,
+                         const TextMetrics& metrics)
+{
+  gfx::Point pen(x, y);
+  if (anchor == "topright" || anchor == "right" || anchor == "bottomright" ||
+      anchor == "baselineright")
+    pen.x = x - metrics.width;
+  else if (anchor == "top" || anchor == "center" || anchor == "bottom" ||
+           anchor == "baseline")
+    pen.x = x - metrics.width / 2;
+
+  if (anchor.compare(0, 8, "baseline") == 0)
+    ; // the baseline anchors use y as-is
+  else if (anchor.compare(0, 6, "bottom") == 0)
+    pen.y = y - metrics.belowBaseline;
+  else if (anchor == "left" || anchor == "center" || anchor == "right")
+    pen.y = y - metrics.height / 2 + metrics.aboveBaseline;
+  else
+    pen.y = y + metrics.aboveBaseline;
+  return pen;
+}
+
+void register_text_tools(std::vector<McpTool>& tools)
+{
+  tools.push_back(NativeTool(
+    "list_text_fonts",
+    "List the fonts measure_text and draw_text can use, as JSON objects with name, kind "
+    "(\"bitmap\" or \"truetype\") and path. Fonts are discovered under the "
+    "ASEPRITE_MCP_FONTS directory (or ~/.aseprite-mcp/fonts by default): a directory "
+    "holding font.json is a bitmap font, and .ttf/.otf files are TrueType; on macOS the "
+    "system font directories are also listed. Bitmap fonts are the right choice for pixel "
+    "art: their glyphs are already pixels and size scales them by whole numbers.",
+    json11::Json::object {
+      { "type", "object" },
+      { "properties", json11::Json::object {} },
+      { "required", json11::Json::array {} },
+    },
+    [](const json11::Json&) -> ToolResult {
+      json11::Json::array out;
+      for (const FontInfo& font : listFonts()) {
+        out.push_back(json11::Json::object {
+          { "name", font.name },
+          { "kind", font.kind == FontInfo::Kind::Bitmap ? "bitmap" : "truetype" },
+          { "path", font.path },
+        });
+      }
+
+      ToolResult result;
+      result.text = json11::Json(out).dump();
+      return result;
+    }));
+
+  tools.push_back(NativeTool(
+    "measure_text",
+    "Measure text without drawing it, reporting the ink box (width and height), the pen "
+    "advance, and the ink extents above and below the baseline. Both bitmap fonts "
+    "(sprite-sheet) and TrueType fonts are supported; bitmap fonts scale by whole numbers. "
+    "Use this to size a panel or center a label in one shot instead of guessing and "
+    "re-rendering.",
+    json11::Json::object {
+      { "type", "object" },
+      { "properties", json11::Json::object {
+        { "text", json11::Json::object {
+            { "type", "string" },
+            { "description", "The string to measure" } } },
+        { "font", json11::Json::object {
+            { "type", "string" },
+            { "description", "Font name from list_text_fonts, or a path to a .ttf/.otf "
+                             "file or a bitmap font directory" } } },
+        { "size", json11::Json::object {
+            { "type", "integer" },
+            { "description", "Pixel size for TrueType fonts; integer scale factor for "
+                             "bitmap fonts (default: 1)" } } },
+        { "letter_spacing", json11::Json::object {
+            { "type", "integer" },
+            { "description", "Extra pixels between glyphs (default: 0)" } } },
+        { "bold", json11::Json::object {
+            { "type", "integer" },
+            { "description", "Faux-bold passes; each grows strokes by 1px (default: 0)" } } },
+        { "antialias", json11::Json::object {
+            { "type", "boolean" },
+            { "description", "Keep greyscale edges instead of hard pixels (default: false)" } } },
+      } },
+      { "required", json11::Json::array { "text", "font" } },
+    },
+    [](const json11::Json& args) -> ToolResult {
+      FontInfo font;
+      std::string error;
+      if (!resolveFont(argString(args, "font"), font, error))
+        return toolError(error);
+
+      TextRenderOptions options;
+      options.size = argInt(args, "size", 1);
+      options.letterSpacing = argInt(args, "letter_spacing", 0);
+      const int bold = argInt(args, "bold", 0);
+      if (bold < 0)
+        return toolError("bold must be >= 0");
+      if (options.size < 1 || options.size > 1024)
+        return toolError("size must be between 1 and 1024");
+      options.bold = bold > 0;
+      options.antialias = argBool(args, "antialias", false);
+
+      TextMetrics metrics;
+      if (!measureText(font, argString(args, "text"), options, metrics, error))
+        return toolError(error);
+
+      ToolResult result;
+      result.text = "width=" + std::to_string(metrics.width) +
+                    " height=" + std::to_string(metrics.height) +
+                    " advance_width=" + std::to_string(metrics.advanceWidth) +
+                    " above_baseline=" + std::to_string(metrics.aboveBaseline) +
+                    " below_baseline=" + std::to_string(metrics.belowBaseline);
+      return result;
+    }));
+
+  tools.push_back(NativeTool(
+    "draw_text",
+    "Draw text onto a sprite. Glyphs are rasterized natively and composited into the "
+    "layer's cel image, because the Lua API has no text drawing of its own. The anchor "
+    "selects which point of the text (x, y) refers to; outline and shadow are drawn "
+    "behind the letters in the given colors. Optional layer_name defaults to the active "
+    "layer. The file is saved.",
+    json11::Json::object {
+      { "type", "object" },
+      { "properties", json11::Json::object {
+        { "filename", json11::Json::object {
+            { "type", "string" },
+            { "description", "Aseprite file to modify" } } },
+        { "text", json11::Json::object {
+            { "type", "string" },
+            { "description", "String to draw" } } },
+        { "x", json11::Json::object {
+            { "type", "integer" },
+            { "description", "X coordinate of the anchor point" } } },
+        { "y", json11::Json::object {
+            { "type", "integer" },
+            { "description", "Y coordinate of the anchor point" } } },
+        { "font", json11::Json::object {
+            { "type", "string" },
+            { "description", "Font name from list_text_fonts, or a path to a .ttf/.otf "
+                             "file or a bitmap font directory" } } },
+        { "size", json11::Json::object {
+            { "type", "integer" },
+            { "description", "Pixel size for TrueType fonts; integer scale factor for "
+                             "bitmap fonts (default: 1)" } } },
+        { "color", json11::Json::object {
+            { "type", "string" },
+            { "description", "Text color #RRGGBB or #RRGGBBAA (default: #FFFFFF)" } } },
+        { "layer_name", json11::Json::object {
+            { "type", "string" },
+            { "description", "Layer to draw on (default: active layer)" } } },
+        { "frame_index", json11::Json::object {
+            { "type", "integer" },
+            { "description", "Frame index starting at 1 (default: 1)" } } },
+        { "anchor", json11::Json::object {
+            { "type", "string" },
+            { "description", "Which point of the text (x, y) refers to: topleft, top, "
+                             "topright, left, center, right, bottomleft, bottom, "
+                             "bottomright, baselineleft, baseline or baselineright "
+                             "(default: topleft)" } } },
+        { "letter_spacing", json11::Json::object {
+            { "type", "integer" },
+            { "description", "Extra pixels between glyphs (default: 0)" } } },
+        { "bold", json11::Json::object {
+            { "type", "integer" },
+            { "description", "Faux-bold passes; each grows strokes by 1px (default: 0)" } } },
+        { "outline_color", json11::Json::object {
+            { "type", "string" },
+            { "description", "If set, draw an outline in this color (default: no outline)" } } },
+        { "outline_width", json11::Json::object {
+            { "type", "integer" },
+            { "description", "Outline thickness in pixels (default: 1)" } } },
+        { "outline_diagonal", json11::Json::object {
+            { "type", "boolean" },
+            { "description", "Include diagonal neighbors in the outline, giving rounded "
+                             "corners (default: true)" } } },
+        { "shadow_color", json11::Json::object {
+            { "type", "string" },
+            { "description", "If set, draw a drop shadow in this color "
+                             "(default: no shadow)" } } },
+        { "shadow_dx", json11::Json::object {
+            { "type", "integer" },
+            { "description", "Shadow X offset (default: 1)" } } },
+        { "shadow_dy", json11::Json::object {
+            { "type", "integer" },
+            { "description", "Shadow Y offset (default: 1)" } } },
+        { "antialias", json11::Json::object {
+            { "type", "boolean" },
+            { "description", "Keep greyscale edges instead of hard pixels (default: false)" } } },
+        { "create_if_missing", json11::Json::object {
+            { "type", "boolean" },
+            { "description", "Create the layer when it does not exist (default: true)" } } },
+      } },
+      { "required", json11::Json::array { "filename", "text", "x", "y", "font" } },
+    },
+    [](const json11::Json& args) -> ToolResult {
+      const std::string anchor = argString(args, "anchor", "topleft");
+      if (!isValidAnchor(anchor)) {
+        return toolError("Invalid anchor '" + anchor + "'. Expected one of: baseline, "
+                         "baselineleft, baselineright, bottom, bottomleft, bottomright, "
+                         "center, left, right, top, topleft, topright");
+      }
+
+      int r = 255, g = 255, b = 255, a = 255;
+      if (!parseHexColor(argString(args, "color", "#FFFFFF"), r, g, b, a))
+        return toolError("Invalid color value: " + argString(args, "color"));
+
+      const std::string outlineColor = argString(args, "outline_color");
+      int or_ = 0, og = 0, ob = 0, oa = 255;
+      const bool hasOutline = !outlineColor.empty();
+      if (hasOutline && !parseHexColor(outlineColor, or_, og, ob, oa))
+        return toolError("Invalid outline_color value: " + outlineColor);
+
+      const std::string shadowColor = argString(args, "shadow_color");
+      int sr = 0, sg = 0, sb = 0, sa = 255;
+      const bool hasShadow = !shadowColor.empty();
+      if (hasShadow && !parseHexColor(shadowColor, sr, sg, sb, sa))
+        return toolError("Invalid shadow_color value: " + shadowColor);
+
+      FontInfo font;
+      std::string error;
+      if (!resolveFont(argString(args, "font"), font, error))
+        return toolError(error);
+
+      TextRenderOptions options;
+      options.size = argInt(args, "size", 1);
+      options.letterSpacing = argInt(args, "letter_spacing", 0);
+      const int bold = argInt(args, "bold", 0);
+      if (bold < 0)
+        return toolError("bold must be >= 0");
+      if (options.size < 1 || options.size > 1024)
+        return toolError("size must be between 1 and 1024");
+      options.bold = bold > 0;
+      options.antialias = argBool(args, "antialias", false);
+
+      const std::string text = argString(args, "text");
+      TextMetrics metrics;
+      if (!measureText(font, text, options, metrics, error))
+        return toolError(error);
+      if (metrics.width == 0 && metrics.height == 0) {
+        ToolResult result;
+        result.text = "OK: nothing to draw (text has no visible glyphs)";
+        return result;
+      }
+
+      if (!ToolContext::instance().openDocument(argString(args, "filename"), error))
+        return toolError(error);
+
+      app::Context* context = App::instance()->context();
+      Doc* doc = context ? context->activeDocument() : nullptr;
+      if (!doc)
+        return toolError("No active sprite");
+      doc::Sprite* sprite = doc->sprite();
+
+      const int frameIndex = argInt(args, "frame_index", 1);
+      if (frameIndex < 1 || frameIndex > sprite->totalFrames())
+        return toolError("Frame index out of range");
+      const doc::frame_t frame = doc::frame_t(frameIndex - 1);
+
+      const std::string layerName = argString(args, "layer_name");
+      const bool createIfMissing = argBool(args, "create_if_missing", true);
+      const gfx::Point pen = textPenOrigin(anchor, argInt(args, "x"), argInt(args, "y"),
+                                           metrics);
+
+      try {
+        Tx tx(doc);
+        DocApi api = doc->getApi(tx);
+
+        doc::Layer* layer = layerName.empty() ? sprite->firstLayer()
+                                              : findLayerByName(sprite, layerName);
+        if (!layer) {
+          if (layerName.empty())
+            return toolError("No layer to draw on");
+          if (!createIfMissing)
+            return toolError("Layer not found");
+          layer = api.newLayer(sprite->root(), layerName);
+        }
+        if (!layer->isImage())
+          return toolError("Layer cannot hold image pixels");
+
+        auto layerImage = static_cast<doc::LayerImage*>(layer);
+        doc::Cel* cel = layerImage->cel(frame);
+        if (!cel) {
+          doc::ImageRef image(doc::Image::create(sprite->spec()));
+          doc::clear_image(image.get(), 0);
+          cel = api.addCel(layerImage, frame, image);
+        }
+        else if (cel->position() != gfx::Point(0, 0) ||
+                 cel->image()->size() != sprite->size()) {
+          // Make the cel canvas-sized so sprite-global coordinates
+          // can be used directly, like normalize_cel() in Lua.
+          doc::ImageRef image(doc::Image::create(sprite->spec()));
+          doc::clear_image(image.get(), 0);
+          image->copy(cel->image(),
+                      gfx::Clip(gfx::Point(cel->x(), cel->y()), cel->image()->bounds()));
+          api.replaceImage(sprite, cel->data()->imageRef(), image);
+          api.setCelPosition(sprite, cel, 0, 0);
+        }
+
+        doc::Image* target = cel->image();
+        if (hasShadow) {
+          if (!drawTextInImage(font, text, target,
+                               pen.x + argInt(args, "shadow_dx", 1),
+                               pen.y + argInt(args, "shadow_dy", 1),
+                               doc::rgba(sr, sg, sb, sa), options, nullptr, error))
+            return toolError(error);
+        }
+        if (hasOutline) {
+          const int width = argInt(args, "outline_width", 1);
+          if (width < 1 || width > 16)
+            return toolError("outline_width must be between 1 and 16");
+          const bool diagonal = argBool(args, "outline_diagonal", true);
+          for (int dy = -width; dy <= width; ++dy) {
+            for (int dx = -width; dx <= width; ++dx) {
+              if (dx == 0 && dy == 0)
+                continue;
+              // The 4-way outline grows as a diamond (Manhattan
+              // distance), the diagonal one as a square.
+              if (!diagonal && std::abs(dx) + std::abs(dy) > width)
+                continue;
+              if (!drawTextInImage(font, text, target, pen.x + dx, pen.y + dy,
+                                   doc::rgba(or_, og, ob, oa), options, nullptr, error))
+                return toolError(error);
+            }
+          }
+        }
+        if (!drawTextInImage(font, text, target, pen.x, pen.y, doc::rgba(r, g, b, a),
+                             options, nullptr, error))
+          return toolError(error);
+
+        tx.commit();
+      }
+      catch (const std::exception& ex) {
+        return toolError(ex.what());
+      }
+      catch (...) {
+        return toolError("Failed to draw text");
+      }
+
+      const std::string absFn = base::get_absolute_path(doc->filename());
+      context->setActiveDocument(doc);
+      Command* saveCommand = Commands::instance()->byId(CommandId::SaveFileCopyAs());
+      Params params;
+      params.set("filename", absFn.c_str());
+      params.set("useUI", "false");
+      context->executeCommand(saveCommand, params);
+      doc->setFilename(absFn);
+      doc->markAsSaved();
+
+      // The ink box, not the baseline pen, is what the caller sees.
+      const gfx::Point inkTopLeft(pen.x, pen.y - metrics.aboveBaseline);
+      ToolResult result;
+      result.text = "Drew '" + text + "' at (" + std::to_string(inkTopLeft.x) + ", " +
+                    std::to_string(inkTopLeft.y) + "), text box " +
+                    std::to_string(metrics.width) + "x" + std::to_string(metrics.height) +
+                    " (anchor " + anchor + ")";
+      return result;
+    }));
 }
 
 } // anonymous namespace
@@ -1264,6 +1746,8 @@ void register_canvas_draw_tools(std::vector<McpTool>& tools)
              ", " + std::to_string(centerY + radiusY) + ") }\n"
              "  })\n" + layerFrameCelEnd();
     }));
+
+  register_text_tools(tools);
 }
 
 } // namespace mcp

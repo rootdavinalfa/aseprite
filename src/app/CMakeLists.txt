@@ -194,6 +194,8 @@ if(ENABLE_SCRIPTING)
     commands/cmd_open_script_folder.cpp
     commands/cmd_run_script.cpp
     commands/debugger.cpp
+    mcp/mcp_fonts.cpp
+    mcp/mcp_fonts.h
     mcp/mcp_protocol.cpp
     mcp/mcp_protocol.h
     mcp/mcp_server.cpp

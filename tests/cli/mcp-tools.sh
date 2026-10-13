@@ -402,3 +402,78 @@ resp=$(run_tool '{"jsonrpc":"2.0","id":151,"method":"tools/call","params":{"name
 printf '%s' "$resp" | python3 -c 'import sys,json; t=json.load(sys.stdin)["result"]["content"][0]["text"]; m=json.loads(t); assert len(m) == 39, repr(t); assert "blur-3x3" in m and "misc-emboss" in m, repr(t)' || fail "list_convolution_matrices: $resp"
 resp=$(run_tool '{"jsonrpc":"2.0","id":152,"method":"tools/call","params":{"name":"animation_workflow_guide","arguments":{},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}')
 printf '%s' "$resp" | python3 -c 'import sys,json; t=json.load(sys.stdin)["result"]["content"][0]["text"]; assert t.strip(), repr(t)' || fail "animation_workflow_guide: $resp"
+
+echo "MCP tools: text tools draw a bitmap font"
+# A two-glyph sheet font ("A" and "B" are solid 6x7 boxes in 8x8 cells)
+# generated headless with Aseprite itself, so the fixture needs no PNG encoder.
+mkdir -p "$t/fonts/tiny"
+cat > "$t/fonts/tiny/font.json" <<'JSON'
+{
+  "name": "tiny",
+  "letter_gap": 1,
+  "space_width": 2,
+  "sheets": [{
+    "file": "tiny.png",
+    "cell_w": 8,
+    "cell_h": 8,
+    "ascent": 7,
+    "chars": ["AB"]
+  }]
+}
+JSON
+cat > "$t/tiny_sheet.lua" <<LUA
+local spr = Sprite(16, 8)
+local img = Image(16, 8, ColorMode.RGB)
+for y = 1, 7 do
+  for x = 1, 6 do
+    img:putPixel(x, y, Color(255, 255, 255, 255))
+    img:putPixel(x + 8, y, Color(255, 255, 255, 255))
+  end
+end
+spr:newCel(spr.layers[1], spr.frames[1], img, Point(0, 0))
+spr:saveAs("$t/fonts/tiny/tiny.png")
+LUA
+"$ASEPRITE" -b --script "$t/tiny_sheet.lua" || fail "tiny font sheet generation failed"
+[ -f "$t/fonts/tiny/tiny.png" ] || fail "tiny font sheet was not written"
+export ASEPRITE_MCP_FONTS="$t/fonts"
+
+resp=$(run_tool '{"jsonrpc":"2.0","id":160,"method":"tools/call","params":{"name":"list_text_fonts","arguments":{},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}')
+printf '%s' "$resp" | python3 -c 'import sys,json; t=json.load(sys.stdin)["result"]["content"][0]["text"]; f=json.loads(t); assert any(x["name"]=="tiny" and x["kind"]=="bitmap" for x in f), repr(t)' || fail "list_text_fonts: $resp"
+
+resp=$(run_tool '{"jsonrpc":"2.0","id":161,"method":"tools/call","params":{"name":"measure_text","arguments":{"text":"A","font":"tiny"},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}')
+printf '%s' "$resp" | python3 -c 'import sys,json,re; t=json.load(sys.stdin)["result"]["content"][0]["text"]; m=re.search(r"width=(\d+)", t); assert m and int(m.group(1)) > 0, repr(t)' || fail "measure_text width: $resp"
+resp=$(run_tool '{"jsonrpc":"2.0","id":162,"method":"tools/call","params":{"name":"measure_text","arguments":{"text":"A","font":"nope"},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}')
+printf '%s' "$resp" | python3 -c 'import sys,json; r=json.load(sys.stdin)["result"]; assert r["isError"], repr(r); assert "not found" in r["content"][0]["text"], repr(r)' || fail "measure_text unknown font: $resp"
+
+run_tool '{"jsonrpc":"2.0","id":163,"method":"tools/call","params":{"name":"create_canvas","arguments":{"width":16,"height":16,"filename":"'$t'/text.aseprite"},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}' >/dev/null
+resp=$(run_tool '{"jsonrpc":"2.0","id":164,"method":"tools/call","params":{"name":"draw_text","arguments":{"filename":"'$t'/text.aseprite","text":"A","x":2,"y":3,"font":"tiny","color":"#FF00FF","outline_color":"#00FF00"},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}')
+printf '%s' "$resp" | grep -q '"isError":false' || fail "draw_text: $resp"
+resp=$(run_tool '{"jsonrpc":"2.0","id":165,"method":"tools/call","params":{"name":"get_pixel_color","arguments":{"filename":"'$t'/text.aseprite","x":2,"y":3},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}')
+printf '%s' "$resp" | python3 -c 'import sys,json; t=json.load(sys.stdin)["result"]["content"][0]["text"]; assert t.startswith("#ff00ff"), repr(t)' || fail "draw_text pixel: $resp"
+resp=$(run_tool '{"jsonrpc":"2.0","id":166,"method":"tools/call","params":{"name":"get_pixel_color","arguments":{"filename":"'$t'/text.aseprite","x":1,"y":3},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}')
+printf '%s' "$resp" | python3 -c 'import sys,json; t=json.load(sys.stdin)["result"]["content"][0]["text"]; assert t.startswith("#00ff00"), repr(t)' || fail "draw_text outline pixel: $resp"
+resp=$(run_tool '{"jsonrpc":"2.0","id":167,"method":"tools/call","params":{"name":"get_pixel_color","arguments":{"filename":"'$t'/text.aseprite","x":1,"y":2},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}')
+printf '%s' "$resp" | python3 -c 'import sys,json; t=json.load(sys.stdin)["result"]["content"][0]["text"]; assert t.startswith("#00ff00"), repr(t)' || fail "draw_text diagonal outline pixel: $resp"
+
+echo "MCP tools: text anchors, drop shadow, bitmap scaling and 4-way outline"
+run_tool '{"jsonrpc":"2.0","id":168,"method":"tools/call","params":{"name":"create_canvas","arguments":{"width":16,"height":16,"filename":"'$t'/text-anchor.aseprite"},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}' >/dev/null
+resp=$(run_tool '{"jsonrpc":"2.0","id":169,"method":"tools/call","params":{"name":"draw_text","arguments":{"filename":"'$t'/text-anchor.aseprite","text":"A","x":8,"y":8,"font":"tiny","anchor":"center","color":"#FF00FF","shadow_color":"#0000FF","shadow_dx":2,"shadow_dy":2},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}')
+printf '%s' "$resp" | grep -q '"isError":false' || fail "draw_text center anchor: $resp"
+resp=$(run_tool '{"jsonrpc":"2.0","id":170,"method":"tools/call","params":{"name":"get_pixel_color","arguments":{"filename":"'$t'/text-anchor.aseprite","x":5,"y":5},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}')
+printf '%s' "$resp" | python3 -c 'import sys,json; t=json.load(sys.stdin)["result"]["content"][0]["text"]; assert t.startswith("#ff00ff"), repr(t)' || fail "center-anchored ink pixel: $resp"
+resp=$(run_tool '{"jsonrpc":"2.0","id":171,"method":"tools/call","params":{"name":"get_pixel_color","arguments":{"filename":"'$t'/text-anchor.aseprite","x":12,"y":7},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}')
+printf '%s' "$resp" | python3 -c 'import sys,json; t=json.load(sys.stdin)["result"]["content"][0]["text"]; assert t.startswith("#0000ff"), repr(t)' || fail "shadow pixel: $resp"
+resp=$(run_tool '{"jsonrpc":"2.0","id":172,"method":"tools/call","params":{"name":"get_pixel_color","arguments":{"filename":"'$t'/text-anchor.aseprite","x":11,"y":6},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}')
+printf '%s' "$resp" | python3 -c 'import sys,json,re; t=json.load(sys.stdin)["result"]["content"][0]["text"]; m=re.search(r"a=(\d+)", t); assert m and m.group(1)=="0", repr(t)' || fail "pixel between ink and shadow: $resp"
+run_tool '{"jsonrpc":"2.0","id":173,"method":"tools/call","params":{"name":"create_canvas","arguments":{"width":16,"height":16,"filename":"'$t'/text-scale.aseprite"},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}' >/dev/null
+resp=$(run_tool '{"jsonrpc":"2.0","id":174,"method":"tools/call","params":{"name":"draw_text","arguments":{"filename":"'$t'/text-scale.aseprite","text":"A","x":2,"y":1,"font":"tiny","size":2,"color":"#FF00FF"},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}')
+printf '%s' "$resp" | grep -q '"isError":false' || fail "draw_text scale 2: $resp"
+resp=$(run_tool '{"jsonrpc":"2.0","id":175,"method":"tools/call","params":{"name":"get_pixel_color","arguments":{"filename":"'$t'/text-scale.aseprite","x":4,"y":1},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}')
+printf '%s' "$resp" | python3 -c 'import sys,json; t=json.load(sys.stdin)["result"]["content"][0]["text"]; assert t.startswith("#ff00ff"), repr(t)' || fail "scaled glyph pixel: $resp"
+run_tool '{"jsonrpc":"2.0","id":176,"method":"tools/call","params":{"name":"create_canvas","arguments":{"width":16,"height":16,"filename":"'$t'/text-4way.aseprite"},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}' >/dev/null
+resp=$(run_tool '{"jsonrpc":"2.0","id":177,"method":"tools/call","params":{"name":"draw_text","arguments":{"filename":"'$t'/text-4way.aseprite","text":"A","x":2,"y":3,"font":"tiny","color":"#FF00FF","outline_color":"#00FF00","outline_diagonal":false},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}')
+printf '%s' "$resp" | grep -q '"isError":false' || fail "draw_text 4-way outline: $resp"
+resp=$(run_tool '{"jsonrpc":"2.0","id":178,"method":"tools/call","params":{"name":"get_pixel_color","arguments":{"filename":"'$t'/text-4way.aseprite","x":8,"y":9},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}')
+printf '%s' "$resp" | python3 -c 'import sys,json; t=json.load(sys.stdin)["result"]["content"][0]["text"]; assert t.startswith("#00ff00"), repr(t)' || fail "4-way outline straight pixel: $resp"
+resp=$(run_tool '{"jsonrpc":"2.0","id":179,"method":"tools/call","params":{"name":"get_pixel_color","arguments":{"filename":"'$t'/text-4way.aseprite","x":1,"y":2},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}')
+printf '%s' "$resp" | python3 -c 'import sys,json,re; t=json.load(sys.stdin)["result"]["content"][0]["text"]; m=re.search(r"a=(\d+)", t); assert m and m.group(1)=="0", repr(t)' || fail "4-way outline diagonal pixel: $resp"
