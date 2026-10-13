@@ -144,11 +144,11 @@ std::string tilemapLayerLookup(const std::string& layerName)
          "if not target.isTilemap then print(\"ERROR:Layer is not a tilemap layer\") return end\n";
 }
 
-// Maps a normalized color channel back to 0-255, like Python's
-// colorsys helpers.
+// Maps a normalized color channel back to 0-255 with Python's round()
+// semantics: half-to-even, which std::nearbyint does by default.
 int channelToByte(const double value)
 {
-  const int byte = static_cast<int>(std::lround(value * 255));
+  const int byte = static_cast<int>(std::nearbyint(value * 255));
   return std::min(255, std::max(0, byte));
 }
 

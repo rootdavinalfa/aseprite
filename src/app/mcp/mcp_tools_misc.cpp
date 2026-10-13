@@ -95,6 +95,8 @@ void register_misc_tools(std::vector<McpTool>& tools)
       const std::string targetFilename = argString(args, "target_filename");
       const std::string absSource = base::get_absolute_path(sourceFilename);
       const std::string absTarget = base::get_absolute_path(targetFilename);
+      if (base::normalize_path(absSource) == base::normalize_path(absTarget))
+        return luaError("source and target must be different files");
       if (!base::is_file(absSource))
         return luaError("File " + sourceFilename + " not found");
       if (!base::is_file(absTarget))
@@ -116,22 +118,10 @@ void register_misc_tools(std::vector<McpTool>& tools)
       const std::string createFrames =
         argBool(args, "create_missing_frames", true) ? "true" : "false";
 
-      // The sprite already being the active document makes app.open() return
-      // nil, which a plain "app.open twice" would report as a failure; fall
-      // back to the sprite list so a repeated call in one server process works.
       std::string script =
-        "local function open_sprite(path)\n"
-        "  local spr = app.open(path)\n"
-        "  if spr then return spr end\n"
-        "  for _, s in ipairs(app.sprites) do\n"
-        "    if s.filename == path then return s end\n"
-        "  end\n"
-        "  return nil\n"
-        "end\n"
-        "\n"
-        "local src = open_sprite(\"" + luaString(absSource) + "\")\n"
+        "local src = app.open(\"" + luaString(absSource) + "\")\n"
         "if not src then print(\"ERROR:Source sprite not opened\") return end\n"
-        "local dst = open_sprite(\"" + luaString(absTarget) + "\")\n"
+        "local dst = app.open(\"" + luaString(absTarget) + "\")\n"
         "if not dst then print(\"ERROR:Target sprite not opened\") return end\n"
         "\n" +
         std::string(kFindLayerLua) +
