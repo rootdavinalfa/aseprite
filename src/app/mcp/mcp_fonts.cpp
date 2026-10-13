@@ -55,6 +55,15 @@ struct InkBounds {
   int maxY = -1;
 };
 
+// Rasterization bounds, checked before any work is materialized: a
+// size or spacing typo must never be able to allocate gigabytes.
+constexpr int kMaxScale = 1024;
+constexpr int kMaxBold = 8;
+constexpr int kMaxLetterSpacing = 1024;
+constexpr size_t kMaxInkPoints = 4u << 20; // ~4M points
+constexpr int kMaxPenAdvance = 1 << 24;    // keeps layout math away from int overflow
+constexpr int kMaxStampSize = 4096;        // per stamp dimension
+
 bool hasExtension(const std::string& path, const char* ext)
 {
   return base::utf8_icmp(base::get_file_extension(path), ext) == 0;
@@ -180,10 +189,16 @@ public:
         s.originY = origin.array_items()[1].int_value();
       }
 
+      if (s.cellW <= 0 || s.cellH <= 0 || s.originX < 0 || s.originY < 0) {
+        error = "Bad sheet in " + descriptor + ": invalid cell size or origin";
+        return false;
+      }
+
       // Sheets are consulted in order and the first one to claim a
       // codepoint wins.
       const int sheetIndex = int(m_sheets.size());
       int row = 0;
+      int columns = 0;
       for (const json11::Json& line : sheet["chars"].array_items()) {
         int col = 0;
         for (base::utf8_decode chars(line.string_value()); !chars.is_end();) {
@@ -192,7 +207,16 @@ public:
             m_index[cp] = Location { sheetIndex, row, col };
           ++col;
         }
+        columns = std::max(columns, col);
         ++row;
+      }
+
+      // Every referenced cell (and the dark-rule probe area, which is
+      // the cell itself) must live inside the decoded texture.
+      if (int64_t(s.originX) + int64_t(columns) * s.cellW > s.width ||
+          int64_t(s.originY) + int64_t(row) * s.cellH > s.height) {
+        error = "Bad sheet in " + descriptor + ": the cell grid runs outside " + file;
+        return false;
       }
 
       m_sheets.push_back(std::move(s));
@@ -265,23 +289,31 @@ private:
 
   void readCell(const BitmapSheet& sheet, const int row, const int col, Glyph& glyph) const
   {
+    glyph.ink.clear();
+    glyph.ascent = sheet.ascent;
+
     const int ox = sheet.originX + col * sheet.cellW;
     const int oy = sheet.originY + row * sheet.cellH;
-    int boxW = std::max(0, std::min(sheet.cellW, sheet.width - ox));
-    int boxH = std::max(0, std::min(sheet.cellH, sheet.height - oy));
+    // Sheets are validated at load; still never index outside the
+    // decoded texture, whatever the descriptor says.
+    if (ox < 0 || oy < 0 || ox >= sheet.width || oy >= sheet.height) {
+      glyph.advance = m_spaceWidth + m_letterGap;
+      return;
+    }
 
+    const int availW = std::min(sheet.cellW, sheet.width - ox);
+    const int availH = std::min(sheet.cellH, sheet.height - oy);
+    int boxW = availW;
+    int boxH = availH;
     if (sheet.dark) {
       // The box runs from the cell origin until the white background.
       boxW = 0;
-      while (boxW < sheet.cellW && ox + boxW < sheet.width && !isBackground(sheet, ox + boxW, oy))
+      while (boxW < availW && !isBackground(sheet, ox + boxW, oy))
         ++boxW;
       boxH = 0;
-      while (boxH < sheet.cellH && oy + boxH < sheet.height && !isBackground(sheet, ox, oy + boxH))
+      while (boxH < availH && !isBackground(sheet, ox, oy + boxH))
         ++boxH;
     }
-
-    glyph.ink.clear();
-    glyph.ascent = sheet.ascent;
     int inkWidth = 0;
     for (int y = 0; y < boxH; ++y) {
       for (int x = 0; x < boxW; ++x) {
@@ -315,14 +347,16 @@ std::map<std::string, std::shared_ptr<BitmapFont>>& bitmapFontCache()
   return cache;
 }
 
-void dilateInk(Ink& ink)
+void dilateInk(Ink& ink, const int passes)
 {
-  Ink grown = ink;
-  for (const auto& point : ink) {
-    grown.insert(std::make_pair(point.first + 1, point.second));
-    grown.insert(std::make_pair(point.first, point.second + 1));
+  for (int pass = 0; pass < passes; ++pass) {
+    Ink grown = ink;
+    for (const auto& point : ink) {
+      grown.insert(std::make_pair(point.first + 1, point.second));
+      grown.insert(std::make_pair(point.first, point.second + 1));
+    }
+    ink.swap(grown);
   }
-  ink.swap(grown);
 }
 
 InkBounds boundsOf(const Ink& ink)
@@ -376,6 +410,8 @@ bool shapeBitmap(const FontInfo& font,
   }
 
   const int scale = options.size;
+  const int spacing = options.letterSpacing;
+  size_t points = 0;
   int pen = 0;
   bool any = false;
   for (base::utf8_decode chars(text); !chars.is_end();) {
@@ -383,6 +419,13 @@ bool shapeBitmap(const FontInfo& font,
     Glyph glyph;
     if (!cached->glyphFor(cp, glyph))
       continue;
+
+    // Check the budget before materializing this glyph's block.
+    points += glyph.ink.size() * size_t(scale) * size_t(scale);
+    if (points > kMaxInkPoints) {
+      error = "Text is too large to render";
+      return false;
+    }
 
     for (const auto& point : glyph.ink) {
       const int baseX = pen + point.first * scale;
@@ -393,11 +436,15 @@ bool shapeBitmap(const FontInfo& font,
       }
     }
 
-    pen += glyph.advance * scale + options.letterSpacing;
+    pen += glyph.advance * scale + spacing;
+    if (pen > kMaxPenAdvance || pen < -kMaxPenAdvance) {
+      error = "Text is too large to render";
+      return false;
+    }
     any = true;
   }
 
-  advance = std::max(0, pen - (any ? options.letterSpacing : 0));
+  advance = std::max(0, pen - (any ? spacing : 0));
   return true;
 }
 
@@ -427,6 +474,7 @@ bool shapeTrueType(const FontInfo& font,
   // Antialiased edges are kept as hard pixels above this coverage.
   const int cutoff = options.antialias ? 1 : 128;
 
+  size_t points = 0;
   double pen = 0;
   bool any = false;
   for (base::utf8_decode chars(text); !chars.is_end();) {
@@ -435,9 +483,16 @@ bool shapeTrueType(const FontInfo& font,
       continue;
 
     const FT_GlyphSlot slot = face->glyph;
+    const FT_Bitmap& bitmap = slot->bitmap;
+    // Check the budget before materializing this glyph's block.
+    points += size_t(bitmap.rows) * size_t(bitmap.width);
+    if (points > kMaxInkPoints) {
+      error = "Text is too large to render";
+      return false;
+    }
+
     const int baseX = int(std::lround(pen)) + slot->bitmap_left;
     const int baseY = -slot->bitmap_top;
-    const FT_Bitmap& bitmap = slot->bitmap;
     if (bitmap.pixel_mode == FT_PIXEL_MODE_MONO) {
       for (int y = 0; y < int(bitmap.rows); ++y) {
         const uint8_t* src = bitmap.buffer + y * bitmap.pitch;
@@ -459,6 +514,10 @@ bool shapeTrueType(const FontInfo& font,
 
     pen += slot->advance.x / 64.0;
     pen += options.letterSpacing;
+    if (pen > kMaxPenAdvance || pen < -kMaxPenAdvance) {
+      error = "Text is too large to render";
+      return false;
+    }
     any = true;
   }
 
@@ -475,6 +534,21 @@ bool shape(const FontInfo& font,
            int& advance,
            std::string& error)
 {
+  if (options.size > kMaxScale) {
+    error = "size must be at most " + std::to_string(kMaxScale);
+    return false;
+  }
+  if (options.bold < 0 || options.bold > kMaxBold) {
+    error = "bold must be between 0 and " + std::to_string(kMaxBold);
+    return false;
+  }
+  if (options.letterSpacing < -kMaxLetterSpacing ||
+      options.letterSpacing > kMaxLetterSpacing) {
+    error = "letter_spacing must be between -" + std::to_string(kMaxLetterSpacing) +
+            " and " + std::to_string(kMaxLetterSpacing);
+    return false;
+  }
+
   if (font.kind == FontInfo::Kind::Bitmap) {
     if (!shapeBitmap(font, text, options, ink, advance, error))
       return false;
@@ -484,9 +558,9 @@ bool shape(const FontInfo& font,
       return false;
   }
 
-  if (options.bold && !ink.empty()) {
-    dilateInk(ink);
-    advance += 1;
+  if (options.bold > 0 && !ink.empty()) {
+    dilateInk(ink, options.bold);
+    advance += options.bold;
   }
 
   // Ink is positioned so its box starts at the pen origin on x; the
@@ -633,7 +707,7 @@ bool drawTextInImage(const FontInfo& font,
   const InkBounds bounds = boundsOf(ink);
   const int stampW = bounds.maxX - bounds.minX + 1;
   const int stampH = bounds.maxY - bounds.minY + 1;
-  if (stampW > 4096 || stampH > 4096) {
+  if (stampW > kMaxStampSize || stampH > kMaxStampSize) {
     // A letter-spacing typo can ask for a gigapixel run; fail fast
     // instead of trying to allocate it.
     error = "Text is too large to render (" + std::to_string(stampW) + "x" +
@@ -642,6 +716,10 @@ bool drawTextInImage(const FontInfo& font,
   }
 
   doc::ImageRef stamp(doc::Image::create(doc::IMAGE_RGB, stampW, stampH));
+  if (!stamp) {
+    error = "Could not allocate the text stamp";
+    return false;
+  }
   doc::clear_image(stamp.get(), 0);
   for (const auto& point : ink)
     doc::put_pixel(stamp.get(), point.first - bounds.minX, point.second - bounds.minY, color);

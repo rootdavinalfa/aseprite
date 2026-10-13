@@ -36,7 +36,7 @@ struct FontInfo {
 struct TextRenderOptions {
   int size = 1;
   int letterSpacing = 0;
-  bool bold = false;
+  int bold = 0; // faux-bold passes; each grows strokes by 1px
   bool antialias = false;
 };
 

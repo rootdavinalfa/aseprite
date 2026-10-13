@@ -477,3 +477,95 @@ resp=$(run_tool '{"jsonrpc":"2.0","id":178,"method":"tools/call","params":{"name
 printf '%s' "$resp" | python3 -c 'import sys,json; t=json.load(sys.stdin)["result"]["content"][0]["text"]; assert t.startswith("#00ff00"), repr(t)' || fail "4-way outline straight pixel: $resp"
 resp=$(run_tool '{"jsonrpc":"2.0","id":179,"method":"tools/call","params":{"name":"get_pixel_color","arguments":{"filename":"'$t'/text-4way.aseprite","x":1,"y":2},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}')
 printf '%s' "$resp" | python3 -c 'import sys,json,re; t=json.load(sys.stdin)["result"]["content"][0]["text"]; m=re.search(r"a=(\d+)", t); assert m and m.group(1)=="0", repr(t)' || fail "4-way outline diagonal pixel: $resp"
+
+echo "MCP tools: text bold passes, rasterization bounds and malformed fonts"
+resp=$(run_tool '{"jsonrpc":"2.0","id":180,"method":"tools/call","params":{"name":"measure_text","arguments":{"text":"A","font":"tiny","bold":1},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}')
+resp2=$(run_tool '{"jsonrpc":"2.0","id":181,"method":"tools/call","params":{"name":"measure_text","arguments":{"text":"A","font":"tiny","bold":2},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}')
+python3 - "$resp" "$resp2" <<'PY' || fail "bold passes: $resp / $resp2"
+import json, re, sys
+def metrics(response):
+    text = json.loads(response)["result"]["content"][0]["text"]
+    m = re.search(r"width=(\d+) height=\d+ advance_width=(\d+)", text)
+    return int(m.group(1)), int(m.group(2))
+w1, a1 = metrics(sys.argv[1])
+w2, a2 = metrics(sys.argv[2])
+assert w2 > w1 and a2 > a1, (w1, a1, w2, a2)
+PY
+resp=$(run_tool '{"jsonrpc":"2.0","id":182,"method":"tools/call","params":{"name":"measure_text","arguments":{"text":"A","font":"tiny","size":1024},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}')
+printf '%s' "$resp" | python3 -c 'import sys,json; r=json.load(sys.stdin)["result"]; assert r["isError"], repr(r)' || fail "measure_text huge size must fail: $resp"
+resp=$(run_tool '{"jsonrpc":"2.0","id":183,"method":"tools/call","params":{"name":"draw_text","arguments":{"filename":"'$t'/text.aseprite","text":"A","x":2,"y":3,"font":"tiny","size":1024,"color":"#FF00FF"},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}')
+printf '%s' "$resp" | python3 -c 'import sys,json; r=json.load(sys.stdin)["result"]; assert r["isError"], repr(r)' || fail "draw_text huge size must fail: $resp"
+resp=$(run_tool '{"jsonrpc":"2.0","id":184,"method":"tools/call","params":{"name":"measure_text","arguments":{"text":"A","font":"tiny","bold":99},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}')
+printf '%s' "$resp" | python3 -c 'import sys,json; r=json.load(sys.stdin)["result"]; assert r["isError"], repr(r)' || fail "measure_text huge bold must fail: $resp"
+
+# Malformed descriptors: a negative origin and a cell grid running past
+# the texture must be rejected cleanly when the font is loaded.
+mkdir -p "$t/fonts/bad-origin" "$t/fonts/bad-cell"
+cp "$t/fonts/tiny/tiny.png" "$t/fonts/bad-origin/tiny.png"
+cp "$t/fonts/tiny/tiny.png" "$t/fonts/bad-cell/tiny.png"
+cat > "$t/fonts/bad-origin/font.json" <<'JSON'
+{ "name": "bad-origin", "letter_gap": 1, "space_width": 2,
+  "sheets": [{ "file": "tiny.png", "cell_w": 8, "cell_h": 8, "ascent": 7, "origin": [-1, 0], "chars": ["AB"] }] }
+JSON
+cat > "$t/fonts/bad-cell/font.json" <<'JSON'
+{ "name": "bad-cell", "letter_gap": 1, "space_width": 2,
+  "sheets": [{ "file": "tiny.png", "cell_w": 64, "cell_h": 8, "ascent": 7, "chars": ["AB"] }] }
+JSON
+resp=$(run_tool '{"jsonrpc":"2.0","id":185,"method":"tools/call","params":{"name":"measure_text","arguments":{"text":"A","font":"bad-origin"},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}')
+printf '%s' "$resp" | python3 -c 'import sys,json; r=json.load(sys.stdin)["result"]; assert r["isError"], repr(r); assert "Bad sheet" in r["content"][0]["text"], repr(r)' || fail "negative origin: $resp"
+resp=$(run_tool '{"jsonrpc":"2.0","id":186,"method":"tools/call","params":{"name":"measure_text","arguments":{"text":"A","font":"bad-cell"},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}')
+printf '%s' "$resp" | python3 -c 'import sys,json; r=json.load(sys.stdin)["result"]; assert r["isError"], repr(r); assert "Bad sheet" in r["content"][0]["text"], repr(r)' || fail "cell past the sheet: $resp"
+resp=$(run_tool '{"jsonrpc":"2.0","id":187,"method":"tools/call","params":{"name":"draw_text","arguments":{"filename":"'$t'/text.aseprite","text":"A","x":2,"y":3,"font":"bad-origin","color":"#FF00FF"},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}')
+printf '%s' "$resp" | python3 -c 'import sys,json; r=json.load(sys.stdin)["result"]; assert r["isError"], repr(r)' || fail "draw_text with malformed font: $resp"
+# list_text_fonts only discovers fonts (it never loads them, like the
+# reference), so the malformed descriptors cannot break the listing.
+resp=$(run_tool '{"jsonrpc":"2.0","id":188,"method":"tools/call","params":{"name":"list_text_fonts","arguments":{},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}')
+printf '%s' "$resp" | python3 -c 'import sys,json; f=json.loads(json.load(sys.stdin)["result"]["content"][0]["text"]); names=[x["name"] for x in f]; assert "bad-origin" in names and "tiny" in names, repr(f)' || fail "list_text_fonts with malformed fonts: $resp"
+
+echo "MCP tools: draw_text defaults to the active layer"
+run_tool '{"jsonrpc":"2.0","id":189,"method":"tools/call","params":{"name":"create_canvas","arguments":{"width":16,"height":16,"filename":"'$t'/text-active.aseprite"},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}' >/dev/null
+run_tool '{"jsonrpc":"2.0","id":190,"method":"tools/call","params":{"name":"add_layer","arguments":{"filename":"'$t'/text-active.aseprite","layer_name":"top"},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}' >/dev/null
+
+mkfifo "$t/mcp-text-in"
+"$ASEPRITE" --mcp < "$t/mcp-text-in" > "$t/mcp-text-out" 2>/dev/null &
+mcp_server=$!
+# Watchdog: if the test stalls, kill the server after 15s so the suite
+# can never hang on it. Disowned so it doesn't hold the test's stdout.
+( sleep 15; kill "$mcp_server" 2>/dev/null ) >/dev/null 2>&1 &
+mcp_watchdog=$!
+disown
+exec 3<> "$t/mcp-text-in"
+
+# set_layer saves the file, which makes the next call reload the
+# document; the reload must keep the active layer chosen here.
+printf '{"jsonrpc":"2.0","id":191,"method":"tools/call","params":{"name":"set_layer","arguments":{"filename":"%s/text-active.aseprite","layer_name":"top"},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}\n' "$t" >&3
+for i in $(seq 1 100); do
+    grep -q '"id":191,' "$t/mcp-text-out" && break
+    sleep 0.1
+done
+grep -q '"id":191,' "$t/mcp-text-out" || fail "no reply to set_layer: $(cat "$t/mcp-text-out")"
+
+printf '{"jsonrpc":"2.0","id":192,"method":"tools/call","params":{"name":"draw_text","arguments":{"filename":"%s/text-active.aseprite","text":"A","x":2,"y":3,"font":"tiny","color":"#FF00FF"},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}\n' "$t" >&3
+for i in $(seq 1 100); do
+    grep -q '"id":192,' "$t/mcp-text-out" && break
+    sleep 0.1
+done
+
+exec 3>&-
+kill "$mcp_server" 2>/dev/null
+wait "$mcp_server" 2>/dev/null
+kill "$mcp_watchdog" 2>/dev/null
+
+python3 -c 'import json,sys
+for line in open(sys.argv[1]):
+    line = line.strip()
+    if not line:
+        continue
+    m = json.loads(line)
+    if m["id"] in (191, 192):
+        assert not m["result"]["isError"], m' "$t/mcp-text-out" || fail "set_layer/draw_text failed: $(cat "$t/mcp-text-out")"
+
+resp=$(run_tool '{"jsonrpc":"2.0","id":193,"method":"tools/call","params":{"name":"get_pixel_color","arguments":{"filename":"'$t'/text-active.aseprite","x":2,"y":3,"layer_name":"top"},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}')
+printf '%s' "$resp" | python3 -c 'import sys,json; t=json.load(sys.stdin)["result"]["content"][0]["text"]; assert t.startswith("#ff00ff"), repr(t)' || fail "text must land on the active layer: $resp"
+resp=$(run_tool '{"jsonrpc":"2.0","id":194,"method":"tools/call","params":{"name":"get_pixel_color","arguments":{"filename":"'$t'/text-active.aseprite","x":2,"y":3,"layer_name":"Layer 1"},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}')
+printf '%s' "$resp" | python3 -c 'import sys,json,re; t=json.load(sys.stdin)["result"]["content"][0]["text"]; m=re.search(r"a=(\d+)", t); assert m and m.group(1)=="0", repr(t)' || fail "text must not land on the bottom layer: $resp"

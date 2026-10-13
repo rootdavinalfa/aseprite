@@ -16,8 +16,14 @@
 #include "app/doc.h"
 #include "app/doc_access.h"
 #include "app/script/engine.h"
+#include "app/site.h"
 #include "base/fs.h"
 #include "base/time.h"
+#include "doc/layer.h"
+#include "doc/sprite.h"
+
+#include <algorithm>
+#include <vector>
 
 namespace app {
 namespace mcp {
@@ -25,6 +31,40 @@ namespace mcp {
 namespace {
 
 const char kErrorPrefix[] = "ERROR:";
+
+// Index chain from the sprite root down to "layer" (empty when the
+// layer doesn't belong to the sprite). Indices survive a document
+// reload, unlike object ids.
+std::vector<int> layerPath(const doc::Sprite* sprite, const doc::Layer* layer)
+{
+  std::vector<int> path;
+  if (!layer || layer->sprite() != sprite)
+    return path;
+
+  while (layer && layer->parent()) {
+    const doc::LayerList& siblings = layer->parent()->layers();
+    const auto it = std::find(siblings.begin(), siblings.end(), layer);
+    if (it == siblings.end())
+      return {};
+    path.push_back(int(it - siblings.begin()));
+    layer = layer->parent();
+  }
+  std::reverse(path.begin(), path.end());
+  return path;
+}
+
+doc::Layer* layerAtPath(const doc::Sprite* sprite, const std::vector<int>& path)
+{
+  const doc::LayerList* layers = &sprite->root()->layers();
+  doc::Layer* layer = nullptr;
+  for (const int index : path) {
+    if (index < 0 || index >= int(layers->size()))
+      return nullptr;
+    layer = (*layers)[index];
+    layers = &layer->layers();
+  }
+  return layer;
+}
 
 // Collects everything the engine prints while a snippet runs.
 class EngineCapture : public script::EngineDelegate {
@@ -73,6 +113,7 @@ bool ToolContext::openDocument(const std::string& filename, std::string& error)
   // file hasn't changed on disk (a stale document is dropped so the
   // reload below doesn't resurrect it). The size is compared too
   // because the modification time is only second-granular.
+  std::vector<int> activeLayerPath;
   if (Doc* doc = m_context->documents().getByFileName(absFn)) {
     if (doc->isModified() ||
         (m_cachedFilename == absFn && m_cachedTime && *m_cachedTime == fileTime &&
@@ -80,6 +121,11 @@ bool ToolContext::openDocument(const std::string& filename, std::string& error)
       m_context->setActiveDocument(doc);
       return true;
     }
+
+    // Reopening the file below creates a new document, whose active
+    // layer would default back to the bottom one. Remember the layer
+    // chosen in this session (set_layer) so the reload keeps it.
+    activeLayerPath = layerPath(doc->sprite(), m_context->activeSite().layer());
 
     m_cachedFilename.clear();
     m_cachedTime.reset();
@@ -105,6 +151,11 @@ bool ToolContext::openDocument(const std::string& filename, std::string& error)
   if (!doc || base::normalize_path(doc->filename()) != base::normalize_path(absFn)) {
     error = "Failed to open " + filename;
     return false;
+  }
+
+  if (!activeLayerPath.empty()) {
+    if (doc::Layer* layer = layerAtPath(doc->sprite(), activeLayerPath))
+      m_context->setActiveLayer(layer);
   }
 
   m_cachedFilename = absFn;

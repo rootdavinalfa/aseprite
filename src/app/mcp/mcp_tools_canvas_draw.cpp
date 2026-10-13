@@ -19,6 +19,7 @@
 #include "app/doc.h"
 #include "app/doc_api.h"
 #include "app/mcp/mcp_tool_context.h"
+#include "app/site.h"
 #include "app/tx.h"
 #include "base/fs.h"
 #include "doc/cel.h"
@@ -382,12 +383,7 @@ void register_text_tools(std::vector<McpTool>& tools)
       TextRenderOptions options;
       options.size = argInt(args, "size", 1);
       options.letterSpacing = argInt(args, "letter_spacing", 0);
-      const int bold = argInt(args, "bold", 0);
-      if (bold < 0)
-        return toolError("bold must be >= 0");
-      if (options.size < 1 || options.size > 1024)
-        return toolError("size must be between 1 and 1024");
-      options.bold = bold > 0;
+      options.bold = argInt(args, "bold", 0);
       options.antialias = argBool(args, "antialias", false);
 
       TextMetrics metrics;
@@ -515,12 +511,7 @@ void register_text_tools(std::vector<McpTool>& tools)
       TextRenderOptions options;
       options.size = argInt(args, "size", 1);
       options.letterSpacing = argInt(args, "letter_spacing", 0);
-      const int bold = argInt(args, "bold", 0);
-      if (bold < 0)
-        return toolError("bold must be >= 0");
-      if (options.size < 1 || options.size > 1024)
-        return toolError("size must be between 1 and 1024");
-      options.bold = bold > 0;
+      options.bold = argInt(args, "bold", 0);
       options.antialias = argBool(args, "antialias", false);
 
       const std::string text = argString(args, "text");
@@ -556,8 +547,20 @@ void register_text_tools(std::vector<McpTool>& tools)
         Tx tx(doc);
         DocApi api = doc->getApi(tx);
 
-        doc::Layer* layer = layerName.empty() ? sprite->firstLayer()
-                                              : findLayerByName(sprite, layerName);
+        doc::Layer* layer = nullptr;
+        if (!layerName.empty()) {
+          layer = findLayerByName(sprite, layerName);
+        }
+        else {
+          // The active layer, like app.activeLayer in Lua; only when
+          // there is no active layer fall back to the bottom one.
+          layer = context->activeSite().layer();
+          if (layer && layer->sprite() != sprite)
+            layer = nullptr;
+          if (!layer)
+            layer = sprite->firstLayer();
+        }
+
         if (!layer) {
           if (layerName.empty())
             return toolError("No layer to draw on");
@@ -572,6 +575,8 @@ void register_text_tools(std::vector<McpTool>& tools)
         doc::Cel* cel = layerImage->cel(frame);
         if (!cel) {
           doc::ImageRef image(doc::Image::create(sprite->spec()));
+          if (!image)
+            return toolError("Could not allocate the cel image");
           doc::clear_image(image.get(), 0);
           cel = api.addCel(layerImage, frame, image);
         }
@@ -580,6 +585,8 @@ void register_text_tools(std::vector<McpTool>& tools)
           // Make the cel canvas-sized so sprite-global coordinates
           // can be used directly, like normalize_cel() in Lua.
           doc::ImageRef image(doc::Image::create(sprite->spec()));
+          if (!image)
+            return toolError("Could not allocate the cel image");
           doc::clear_image(image.get(), 0);
           image->copy(cel->image(),
                       gfx::Clip(gfx::Point(cel->x(), cel->y()), cel->image()->bounds()));
