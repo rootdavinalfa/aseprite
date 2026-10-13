@@ -580,16 +580,20 @@ void register_io_tools(std::vector<McpTool>& tools)
         script += "params.tag = \"" + luaString(tagName) + "\"\n";
       if (scale > 1) {
         script +=
-          "app.command.SpriteSize{ scale = " + std::to_string(scale) +
-          ", method = \"nearest-neighbor\", ui = false }\n";
+          "local resized = app.command.SpriteSize{ scale = " + std::to_string(scale) +
+          ", method = \"nearest-neighbor\", ui = false }\n"
+          "if not resized then print(\"ERROR:failed to resize sprite for export\") return end\n";
+      }
+      else {
+        script += "local resized = false\n";
       }
       script +=
-        "local ok, result = pcall(function() return app.command.ExportSpriteSheet(params) end)\n";
-      if (scale > 1) {
-        // The temporary resize is undone on every path so the open
-        // document keeps its original size.
-        script += "app.undo()\n";
-      }
+        "local ok, result = pcall(function() return app.command.ExportSpriteSheet(params) end)\n"
+        // Undo the temporary resize only when it actually happened:
+        // SpriteSize reports failure by returning false (it can be
+        // disabled), and an unconditional undo would then pop an
+        // unrelated previous undo state.
+        "if resized then app.undo() end\n";
       script +=
         "if not ok then print(\"ERROR:Failed to export sprite sheet: \" .. tostring(result)) return end\n"
         "if not app.fs.isFile(\"" + luaString(absOutput) + "\") then\n"

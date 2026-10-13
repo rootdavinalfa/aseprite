@@ -298,3 +298,81 @@ resp=$(run_tool '{"jsonrpc":"2.0","id":117,"method":"tools/call","params":{"name
 printf '%s' "$resp" | python3 -c 'import sys,json; t=json.load(sys.stdin)["result"]["content"][0]["text"]; d=json.loads(t); assert d=={"frame":2,"unique_colors":1,"opaque_pixels":1,"top_colors":[{"color":"#FF0000","count":1}]}, repr(t)' || fail "color stats: $resp"
 resp=$(run_tool '{"jsonrpc":"2.0","id":118,"method":"tools/call","params":{"name":"get_color_stats","arguments":{"filename":"'$t'/anim.aseprite","top":0},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}')
 printf '%s' "$resp" | python3 -c 'import sys,json; r=json.load(sys.stdin)["result"]; assert r["isError"], repr(r); assert "top must be >= 1" in r["content"][0]["text"], repr(r)' || fail "color stats validation: $resp"
+
+echo "MCP tools: scaled export_spritesheet is non-destructive in one session"
+# One server process serves all three requests: an edit made before the
+# export must survive the export's temporary resize (and its undo).
+run_tool '{"jsonrpc":"2.0","id":130,"method":"tools/call","params":{"name":"create_canvas","arguments":{"width":8,"height":8,"filename":"'$t'/undo.aseprite"},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}' >/dev/null
+
+mkfifo "$t/mcp-undo-in"
+"$ASEPRITE" --mcp < "$t/mcp-undo-in" > "$t/mcp-undo-out" 2>/dev/null &
+mcp_server=$!
+# Watchdog: if the test stalls, kill the server after 15s so the suite
+# can never hang on it. Disowned so it doesn't hold the test's stdout.
+( sleep 15; kill "$mcp_server" 2>/dev/null ) >/dev/null 2>&1 &
+mcp_watchdog=$!
+disown
+exec 3<> "$t/mcp-undo-in"
+
+printf '{"jsonrpc":"2.0","id":131,"method":"tools/call","params":{"name":"draw_pixels_at","arguments":{"filename":"%s/undo.aseprite","layer_name":"Layer 1","frame_index":1,"pixels":[{"x":3,"y":3,"color":"#ff0000"}]},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}\n' "$t" >&3
+for i in $(seq 1 100); do
+    grep -q '"id":131,' "$t/mcp-undo-out" && break
+    sleep 0.1
+done
+grep -q '"id":131,' "$t/mcp-undo-out" || fail "no reply to draw: $(cat "$t/mcp-undo-out")"
+
+printf '{"jsonrpc":"2.0","id":132,"method":"tools/call","params":{"name":"export_spritesheet","arguments":{"filename":"%s/undo.aseprite","output_filename":"%s/undo-sheet.png","scale":2},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}\n' "$t" "$t" >&3
+for i in $(seq 1 100); do
+    grep -q '"id":132,' "$t/mcp-undo-out" && break
+    sleep 0.1
+done
+grep -q '"id":132,' "$t/mcp-undo-out" || fail "no reply to scaled export: $(cat "$t/mcp-undo-out")"
+
+printf '{"jsonrpc":"2.0","id":133,"method":"tools/call","params":{"name":"get_pixel_color","arguments":{"filename":"%s/undo.aseprite","x":3,"y":3,"layer_name":"Layer 1","frame_index":1},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}\n' "$t" >&3
+for i in $(seq 1 100); do
+    grep -q '"id":133,' "$t/mcp-undo-out" && break
+    sleep 0.1
+done
+exec 3>&-
+kill "$mcp_server" 2>/dev/null
+wait "$mcp_server" 2>/dev/null
+kill "$mcp_watchdog" 2>/dev/null
+
+python3 -c 'import json,sys
+w = {}
+for line in open(sys.argv[1]):
+    line = line.strip()
+    if line:
+        m = json.loads(line)
+        r = m["result"]
+        if m["id"] == 132:
+            assert not r["isError"], r
+        if m["id"] == 133:
+            w["pixel"] = r["content"][0]["text"]
+assert w.get("pixel", "").startswith("#ff0000"), w' "$t/mcp-undo-out" || fail "scaled export reverted the drawing: $(cat "$t/mcp-undo-out")"
+
+echo "MCP tools: scaled export_spritesheet fails cleanly on a read-only document"
+# Aseprite marks a document read-only when it loads a file with an
+# unsupported chunk, so SpriteSize is disabled: the scaled export must
+# report the resize failure and write nothing.
+run_tool '{"jsonrpc":"2.0","id":134,"method":"tools/call","params":{"name":"create_canvas","arguments":{"width":8,"height":8,"filename":"'$t'/ro.aseprite"},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}' >/dev/null
+python3 - "$t/ro.aseprite" "$t/ro-bad.aseprite" <<'PY'
+import struct
+import sys
+
+src, dst = sys.argv[1], sys.argv[2]
+data = bytearray(open(src, "rb").read())
+assert struct.unpack_from("<H", data, 4)[0] == 0xA5E0, "not an .aseprite file"
+off = 128  # first frame header, after the 128-byte file header
+frame_bytes, magic, old_count, duration = struct.unpack_from("<IHHH", data, off)
+nchunks = struct.unpack_from("<I", data, off + 12)[0]
+# Inject an unknown chunk (type 0x9999) before the frame's first chunk.
+data[off + 16:off + 16] = struct.pack("<IH", 6, 0x9999)
+struct.pack_into("<I", data, off, frame_bytes + 6)
+struct.pack_into("<I", data, off + 12, nchunks + 1)
+struct.pack_into("<I", data, 0, len(data))
+open(dst, "wb").write(data)
+PY
+resp=$(run_tool '{"jsonrpc":"2.0","id":135,"method":"tools/call","params":{"name":"export_spritesheet","arguments":{"filename":"'$t'/ro-bad.aseprite","output_filename":"'$t'/ro-sheet.png","scale":2},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}' 2>/dev/null)
+printf '%s' "$resp" | python3 -c 'import sys,json; r=json.load(sys.stdin)["result"]; assert r["isError"], repr(r); assert "failed to resize sprite for export" in r["content"][0]["text"], repr(r)' || fail "read-only scaled export: $resp"
+[ ! -f "$t/ro-sheet.png" ] || fail "read-only scaled export wrote a sheet: $resp"
