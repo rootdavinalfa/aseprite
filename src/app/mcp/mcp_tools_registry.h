@@ -38,12 +38,15 @@ struct McpTool {
 // Builds a tool whose body is a Lua snippet. "buildScript" receives the
 // tool arguments and returns the Lua source; when "openFilename" is
 // true the snippet runs with the file named by the "filename" argument
-// already open as app.activeSprite.
+// already open as app.activeSprite. "after" can post-process a
+// successful result (e.g. attach the PNG written by the snippet); it is
+// not called for error results.
 McpTool LuaTool(std::string name,
                 std::string description,
                 json11::Json inputSchema,
                 bool openFilename,
-                std::function<std::string(const json11::Json&)> buildScript);
+                std::function<std::string(const json11::Json&)> buildScript,
+                std::function<void(const json11::Json&, ToolResult&)> after = {});
 
 // Builds a tool implemented directly in C++ (no Lua engine involved).
 McpTool NativeTool(std::string name,

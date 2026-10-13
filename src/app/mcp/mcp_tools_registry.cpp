@@ -105,13 +105,14 @@ McpTool LuaTool(std::string name,
                 std::string description,
                 json11::Json inputSchema,
                 const bool openFilename,
-                std::function<std::string(const json11::Json&)> buildScript)
+                std::function<std::string(const json11::Json&)> buildScript,
+                std::function<void(const json11::Json&, ToolResult&)> after)
 {
   McpTool tool;
   tool.name = std::move(name);
   tool.description = std::move(description);
   tool.inputSchema = std::move(inputSchema);
-  tool.run = [openFilename, buildScript](const json11::Json& args) -> ToolResult {
+  tool.run = [openFilename, buildScript, after](const json11::Json& args) -> ToolResult {
     if (openFilename) {
       const std::string filename = argString(args, "filename");
       if (!filename.empty()) {
@@ -125,7 +126,10 @@ McpTool LuaTool(std::string name,
         }
       }
     }
-    return ToolContext::instance().runLua(buildScript(args));
+    ToolResult result = ToolContext::instance().runLua(buildScript(args));
+    if (after && !result.isError)
+      after(args, result);
+    return result;
   };
   return tool;
 }

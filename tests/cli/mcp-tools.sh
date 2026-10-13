@@ -228,3 +228,73 @@ resp=$(run_tool '{"jsonrpc":"2.0","id":81,"method":"tools/call","params":{"name"
 printf '%s' "$resp" | python3 -c 'import sys,json; r=json.load(sys.stdin)["result"]; t=r["content"][0]["text"]; assert not r["isError"], repr(r); assert "NOPE" in t, repr(t)' || fail "copy reports skipped layers: $resp"
 resp=$(run_tool '{"jsonrpc":"2.0","id":82,"method":"tools/call","params":{"name":"copy_layers_between_sprites","arguments":{"source_filename":"'$t'/c.aseprite","target_filename":"'$t'/c.aseprite","layer_names":["paint"]},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}')
 printf '%s' "$resp" | python3 -c 'import sys,json; r=json.load(sys.stdin)["result"]; assert r["isError"], repr(r); assert "must be different files" in r["content"][0]["text"], repr(r)' || fail "same-file copy must be rejected: $resp"
+
+echo "MCP tools: export_frame returns the PNG as image content"
+resp=$(run_tool '{"jsonrpc":"2.0","id":95,"method":"tools/call","params":{"name":"export_frame","arguments":{"filename":"'$t'/c.aseprite","frame_index":1,"output_filename":"'$t'/f.png","scale":8},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}')
+printf '%s' "$resp" | grep -q '"type":"image"' || fail "export_frame has no image content: $resp"
+printf '%s' "$resp" | grep -q '"mimeType":"image/png"' || fail "export_frame mime type: $resp"
+printf '%s' "$resp" | python3 -c 'import sys,json,base64,struct; r=json.load(sys.stdin); img=[c for c in r["result"]["content"] if c["type"]=="image"][0]; assert base64.b64decode(img["data"])[:4]==b"\x89PNG"; assert struct.unpack(">II", base64.b64decode(img["data"])[16:24])==(64,64)' || fail "png image content: $resp"
+
+echo "MCP tools: export_sprite and copy_sprite write files"
+resp=$(run_tool '{"jsonrpc":"2.0","id":96,"method":"tools/call","params":{"name":"export_sprite","arguments":{"filename":"'$t'/scene.aseprite","output_filename":"'$t'/sprite.png","format":"png"},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}')
+printf '%s' "$resp" | grep -q '"isError":false' || fail "export_sprite: $resp"
+[ -f "$t/sprite1.png" ] || fail "export_sprite numbered siblings: $resp"
+resp=$(run_tool '{"jsonrpc":"2.0","id":119,"method":"tools/call","params":{"name":"export_sprite","arguments":{"filename":"'$t'/pal.aseprite","output_filename":"'$t'/single.png","format":"png"},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}')
+printf '%s' "$resp" | grep -q '"type":"image"' || fail "export_sprite has no image content: $resp"
+[ -f "$t/single.png" ] || fail "export_sprite did not write the file: $resp"
+resp=$(run_tool '{"jsonrpc":"2.0","id":97,"method":"tools/call","params":{"name":"export_sprite","arguments":{"filename":"'$t'/anim.aseprite","output_filename":"'$t'/anim-noext","format":"GIF"},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}')
+[ -f "$t/anim-noext.gif" ] || fail "export_sprite gif extension: $resp"
+resp=$(run_tool '{"jsonrpc":"2.0","id":98,"method":"tools/call","params":{"name":"copy_sprite","arguments":{"filename":"'$t'/scene.aseprite","output_filename":"'$t'/copy"},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}')
+[ -f "$t/copy.aseprite" ] || fail "copy_sprite did not write the copy: $resp"
+resp=$(run_tool '{"jsonrpc":"2.0","id":99,"method":"tools/call","params":{"name":"copy_sprite","arguments":{"filename":"'$t'/scene.aseprite","output_filename":"'$t'/copy.aseprite"},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}')
+printf '%s' "$resp" | python3 -c 'import sys,json; r=json.load(sys.stdin)["result"]; assert r["isError"], repr(r); assert "already exists" in r["content"][0]["text"], repr(r)' || fail "copy_sprite overwrite guard: $resp"
+resp=$(run_tool '{"jsonrpc":"2.0","id":100,"method":"tools/call","params":{"name":"copy_sprite","arguments":{"filename":"'$t'/scene.aseprite","output_filename":"'$t'/copy.aseprite","overwrite":true},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}')
+printf '%s' "$resp" | grep -q '"isError":false' || fail "copy_sprite overwrite: $resp"
+
+echo "MCP tools: export_spritesheet layouts, data file, and tag filter"
+resp=$(run_tool '{"jsonrpc":"2.0","id":101,"method":"tools/call","params":{"name":"export_spritesheet","arguments":{"filename":"'$t'/anim.aseprite","output_filename":"'$t'/sheet.png","data_filename":"'$t'/sheet.json","scale":2,"padding":0},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}')
+printf '%s' "$resp" | grep -q '"type":"image"' || fail "export_spritesheet has no image content: $resp"
+printf '%s' "$resp" | python3 -c 'import sys,json,base64,struct; r=json.load(sys.stdin); t=r["result"]["content"][0]["text"]; assert "Sprite sheet exported" in t, repr(t); img=[c for c in r["result"]["content"] if c["type"]=="image"][0]; assert struct.unpack(">II", base64.b64decode(img["data"])[16:24])==(48,16)' || fail "spritesheet size: $resp"
+python3 -c 'import json; d=json.load(open("'$t'/sheet.json")); assert d["meta"]["size"]=={"w":48,"h":16}, d' || fail "spritesheet data file"
+run_tool '{"jsonrpc":"2.0","id":102,"method":"tools/call","params":{"name":"set_tag","arguments":{"filename":"'$t'/anim.aseprite","name":"clip","from_frame":1,"to_frame":2},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}' >/dev/null
+resp=$(run_tool '{"jsonrpc":"2.0","id":103,"method":"tools/call","params":{"name":"export_spritesheet","arguments":{"filename":"'$t'/anim.aseprite","output_filename":"'$t'/sheet-clip.png","data_filename":"'$t'/sheet-clip.json","tag_name":"clip"},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}')
+printf '%s' "$resp" | python3 -c 'import sys,json,base64,struct; r=json.load(sys.stdin); img=[c for c in r["result"]["content"] if c["type"]=="image"][0]; assert struct.unpack(">II", base64.b64decode(img["data"])[16:24])==(16,8)' || fail "spritesheet tag filter: $resp"
+python3 -c 'import json; d=json.load(open("'$t'/sheet-clip.json")); assert len(d["frames"])==2, d' || fail "spritesheet tag data file"
+resp=$(run_tool '{"jsonrpc":"2.0","id":104,"method":"tools/call","params":{"name":"export_spritesheet","arguments":{"filename":"'$t'/anim.aseprite","output_filename":"'$t'/nope.png","tag_name":"NOPE"},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}')
+printf '%s' "$resp" | python3 -c 'import sys,json; r=json.load(sys.stdin)["result"]; assert r["isError"], repr(r); assert "Tag not found" in r["content"][0]["text"], repr(r)' || fail "spritesheet missing tag: $resp"
+
+echo "MCP tools: export_layers and export_tag"
+resp=$(run_tool '{"jsonrpc":"2.0","id":105,"method":"tools/call","params":{"name":"export_layers","arguments":{"filename":"'$t'/c.aseprite","output_directory":"'$t'/layers"},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}')
+printf '%s' "$resp" | python3 -c 'import sys,json; t=json.load(sys.stdin)["result"]["content"][0]["text"]; assert "paint1.png" in t and "paint2.png" in t, repr(t)' || fail "export_layers: $resp"
+[ -f "$t/layers/paint1.png" ] || fail "export_layers wrote no paint1.png: $resp"
+resp=$(run_tool '{"jsonrpc":"2.0","id":106,"method":"tools/call","params":{"name":"export_tag","arguments":{"filename":"'$t'/anim.aseprite","tag_name":"clip","output_filename":"'$t'/clip.gif","scale":4},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}')
+printf '%s' "$resp" | python3 -c 'import sys,json; t=json.load(sys.stdin)["result"]["content"][0]["text"]; assert "clip.gif" in t, repr(t)' || fail "export_tag: $resp"
+[ -s "$t/clip.gif" ] || fail "export_tag wrote no gif: $resp"
+resp=$(run_tool '{"jsonrpc":"2.0","id":107,"method":"tools/call","params":{"name":"export_tag","arguments":{"filename":"'$t'/anim.aseprite","tag_name":"NOPE","output_filename":"'$t'/nope.gif"},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}')
+printf '%s' "$resp" | python3 -c 'import sys,json; r=json.load(sys.stdin)["result"]; assert r["isError"], repr(r); assert "Tag not found" in r["content"][0]["text"], repr(r)' || fail "export_tag missing tag: $resp"
+
+echo "MCP tools: import_image_as_layer imports a PNG"
+run_tool '{"jsonrpc":"2.0","id":120,"method":"tools/call","params":{"name":"create_canvas","arguments":{"width":8,"height":8,"filename":"'$t'/importsrc.aseprite"},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}' >/dev/null
+run_tool '{"jsonrpc":"2.0","id":121,"method":"tools/call","params":{"name":"draw_pixels_at","arguments":{"filename":"'$t'/importsrc.aseprite","layer_name":"Layer 1","frame_index":1,"pixels":[{"x":2,"y":2,"color":"#ff0000"}]},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}' >/dev/null
+resp=$(run_tool '{"jsonrpc":"2.0","id":122,"method":"tools/call","params":{"name":"export_frame","arguments":{"filename":"'$t'/importsrc.aseprite","frame_index":1,"output_filename":"'$t'/impsrc.png"},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}')
+printf '%s' "$resp" | grep -q '"isError":false' || fail "import source export: $resp"
+run_tool '{"jsonrpc":"2.0","id":123,"method":"tools/call","params":{"name":"create_canvas","arguments":{"width":8,"height":8,"filename":"'$t'/import.aseprite"},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}' >/dev/null
+resp=$(run_tool '{"jsonrpc":"2.0","id":124,"method":"tools/call","params":{"name":"import_image_as_layer","arguments":{"filename":"'$t'/import.aseprite","image_path":"'$t'/impsrc.png","layer_name":"ref"},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}')
+printf '%s' "$resp" | python3 -c 'import sys,json; r=json.load(sys.stdin)["result"]; assert not r["isError"] and r["content"][0]["text"]=="OK", repr(r)' || fail "import_image_as_layer: $resp"
+resp=$(run_tool '{"jsonrpc":"2.0","id":125,"method":"tools/call","params":{"name":"get_pixel_color","arguments":{"filename":"'$t'/import.aseprite","x":2,"y":2,"layer_name":"ref"},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}')
+printf '%s' "$resp" | python3 -c 'import sys,json; t=json.load(sys.stdin)["result"]["content"][0]["text"]; assert t.startswith("#ff0000"), repr(t)' || fail "imported pixel: $resp"
+
+echo "MCP tools: render_onion_skin and compare_frames and get_color_stats"
+resp=$(run_tool '{"jsonrpc":"2.0","id":112,"method":"tools/call","params":{"name":"render_onion_skin","arguments":{"filename":"'$t'/anim.aseprite","frame_index":2,"output_filename":"'$t'/onion.png","scale":2},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}')
+python3 -c 'import struct; d=open("'$t'/onion.png","rb").read(24); assert struct.unpack(">II", d[16:24])==(16,16)' || fail "onion skin size: $resp"
+resp=$(run_tool '{"jsonrpc":"2.0","id":113,"method":"tools/call","params":{"name":"render_onion_skin","arguments":{"filename":"'$t'/anim.aseprite","frame_index":2,"output_filename":"'$t'/onion.png","ghost_opacity":300},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}')
+printf '%s' "$resp" | python3 -c 'import sys,json; r=json.load(sys.stdin)["result"]; assert r["isError"], repr(r); assert "ghost_opacity" in r["content"][0]["text"], repr(r)' || fail "onion skin validation: $resp"
+resp=$(run_tool '{"jsonrpc":"2.0","id":114,"method":"tools/call","params":{"name":"compare_frames","arguments":{"filename":"'$t'/anim.aseprite","frame_a":1,"frame_b":1},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}')
+printf '%s' "$resp" | python3 -c 'import sys,json; t=json.load(sys.stdin)["result"]["content"][0]["text"]; d=json.loads(t); assert d=={"frame_a":1,"frame_b":1,"changed_pixels":0,"total_pixels":64,"percent_changed":0.0}, repr(t)' || fail "compare identical frames: $resp"
+run_tool '{"jsonrpc":"2.0","id":115,"method":"tools/call","params":{"name":"draw_pixels_at","arguments":{"filename":"'$t'/anim.aseprite","layer_name":"Layer 1","frame_index":2,"pixels":[{"x":5,"y":5,"color":"#ff0000"}]},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}' >/dev/null
+resp=$(run_tool '{"jsonrpc":"2.0","id":116,"method":"tools/call","params":{"name":"compare_frames","arguments":{"filename":"'$t'/anim.aseprite","frame_a":1,"frame_b":2},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}')
+printf '%s' "$resp" | python3 -c 'import sys,json; t=json.load(sys.stdin)["result"]["content"][0]["text"]; d=json.loads(t); assert d=={"frame_a":1,"frame_b":2,"changed_pixels":1,"total_pixels":64,"percent_changed":1.56,"changed_bounds":{"x":5,"y":5,"width":1,"height":1}}, repr(t)' || fail "compare differing frames: $resp"
+resp=$(run_tool '{"jsonrpc":"2.0","id":117,"method":"tools/call","params":{"name":"get_color_stats","arguments":{"filename":"'$t'/anim.aseprite","frame_index":2},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}')
+printf '%s' "$resp" | python3 -c 'import sys,json; t=json.load(sys.stdin)["result"]["content"][0]["text"]; d=json.loads(t); assert d=={"frame":2,"unique_colors":1,"opaque_pixels":1,"top_colors":[{"color":"#FF0000","count":1}]}, repr(t)' || fail "color stats: $resp"
+resp=$(run_tool '{"jsonrpc":"2.0","id":118,"method":"tools/call","params":{"name":"get_color_stats","arguments":{"filename":"'$t'/anim.aseprite","top":0},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}')
+printf '%s' "$resp" | python3 -c 'import sys,json; r=json.load(sys.stdin)["result"]; assert r["isError"], repr(r); assert "top must be >= 1" in r["content"][0]["text"], repr(r)' || fail "color stats validation: $resp"
