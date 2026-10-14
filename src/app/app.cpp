@@ -559,6 +559,20 @@ void App::run(const bool runGuiManager)
       checkUpdate.launch();
 #endif
 
+#ifdef ENABLE_SCRIPTING
+  #ifdef ENABLE_WEBSOCKET
+      // Start the MCP HTTP server if it was enabled in the
+      // "MCP Server" dialog (Edit > MCP Server...).
+      if (preferences().mcp.enabled()) {
+        const int port = preferences().mcp.port();
+        std::string error;
+        if (!mcp::McpServer::instance()->startHttp(port, error)) {
+          LOG(ERROR, "APP: Cannot start MCP HTTP server on port %d: %s\n", port, error.c_str());
+        }
+      }
+  #endif
+#endif
+
 #if !ENABLE_SENTRY
       app::SendCrash sendCrash;
       sendCrash.search();
@@ -583,6 +597,12 @@ void App::run(const bool runGuiManager)
           set_app_state(AppState::kClosingWithException);
           throw;
         }
+
+#ifdef ENABLE_SCRIPTING
+  #ifdef ENABLE_WEBSOCKET
+        mcp::McpServer::instance()->stopHttp();
+  #endif
+#endif
       }
     }
 

@@ -835,6 +835,7 @@
         <separator />
         <item command="KeyboardShortcuts" text="@.edit_keyboard_shortcuts" />
         <item command="Options" text="@.edit_preferences" />
+        <item command="OpenMcpServer" text="@.mcp_server" />
       </menu>
       <menu text="@.sprite" id="sprite_menu">
         <item command="SpriteProperties" text="@.sprite_properties" group="sprite_properties" />

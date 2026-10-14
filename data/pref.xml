@@ -452,6 +452,10 @@
     <section id="scripts">
       <option id="show_run_script_alert" type="bool" default="true" />
     </section>
+    <section id="mcp">
+      <option id="enabled" type="bool" default="false" />
+      <option id="port" type="int" default="3777" />
+    </section>
     <section id="color">
       <option id="manage" type="bool" default="true" />
       <option id="working_rgb_space" type="std::string" default="&quot;sRGB&quot;" />

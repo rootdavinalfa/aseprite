@@ -191,6 +191,8 @@ if(ENABLE_SCRIPTING)
 
   target_sources(app-lib PRIVATE
     commands/cmd_developer_console.cpp
+    commands/cmd_mcp_server.cpp
+    commands/cmd_mcp_server.h
     commands/cmd_open_script_folder.cpp
     commands/cmd_run_script.cpp
     commands/debugger.cpp
@@ -271,7 +273,9 @@ if(ENABLE_SCRIPTING)
     script/version_class.cpp
     script/window_class.cpp
     shell.cpp
-    ui/devconsole_view.cpp)
+    ui/devconsole_view.cpp
+    ui/mcp_server_window.cpp
+    ui/mcp_server_window.h)
 endif()
 
 # Main app sources
