@@ -644,3 +644,10 @@ assert replies[204]["isError"] and "Port" in text(204), text(204)
 assert not replies[205]["isError"] and "18100" in text(205), text(205)
 assert replies[206]["isError"] and "No preview server running" in text(206), text(206)
 PY
+
+echo "MCP tools: 116 tools, deterministic order"
+run_list() { printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}' | "$ASEPRITE" --mcp; }
+a=$(run_list)
+b=$(run_list)
+[ "$a" = "$b" ] || fail "tools/list is not deterministic"
+printf '%s' "$a" | python3 -c 'import sys,json; r=json.load(sys.stdin); assert len(r["result"]["tools"])==116, len(r["result"]["tools"])' || fail "expected 116 tools"
