@@ -198,8 +198,23 @@ AppOptions::AppOptions(int argc, const char* argv[])
     m_startShell = m_po.enabled(m_shell);
     m_startMcp = m_po.enabled(m_mcp);
     m_startMcpHttp = m_po.enabled(m_mcpHttp);
-    if (m_startMcpHttp)
-      m_mcpHttpPort = static_cast<int>(strtol(m_po.value_of(m_mcpHttp).c_str(), nullptr, 0));
+    if (m_startMcpHttp) {
+  #ifndef ENABLE_WEBSOCKET
+      std::cerr << m_exeName
+                << ": --mcp-http is not supported in this build "
+                   "(built without websocket support)\n";
+      std::exit(1);
+  #else
+      const std::string portValue = m_po.value_of(m_mcpHttp);
+      char* end = nullptr;
+      const long port = strtol(portValue.c_str(), &end, 10);
+      if (end == portValue.c_str() || *end != '\0' || port < 1 || port > 65535) {
+        std::cerr << m_exeName << ": --mcp-http needs a port between 1 and 65535\n";
+        std::exit(1);
+      }
+      m_mcpHttpPort = static_cast<int>(port);
+  #endif
+    }
 
     if (static_cast<int>(m_startShell) + static_cast<int>(m_startMcp) +
           static_cast<int>(m_startMcpHttp) > 1) {

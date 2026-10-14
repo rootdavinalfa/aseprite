@@ -17,6 +17,7 @@
 #include <memory>
 #include <mutex>
 #include <string>
+#include <vector>
 
 namespace ix {
 struct HttpRequest;
@@ -59,12 +60,23 @@ private:
   json11::Json handleMessage(const json11::Json& request);
 
 #ifdef ENABLE_WEBSOCKET
+  // State shared between the ix worker thread serving a request and
+  // the main thread that executes it in GUI mode; every request is
+  // registered in m_pendingHttp while it is pending so stopHttp() can
+  // cancel it instead of waiting for the marshaling timeout.
+  struct PendingHttpRequest;
+
   std::shared_ptr<ix::HttpResponse> handleHttpRequest(
     const std::shared_ptr<ix::HttpRequest>& request);
-  json11::Json dispatchHttp(const json11::Json& request);
+  json11::Json dispatchHttp(const json11::Json& request, bool modern);
+  void removePendingHttpRequest(const std::shared_ptr<PendingHttpRequest>& pending);
 
   std::unique_ptr<ix::HttpServer> m_httpServer;
   std::mutex m_httpDispatchMutex;
+
+  std::vector<std::shared_ptr<PendingHttpRequest>> m_pendingHttp;
+  std::mutex m_pendingHttpMutex;
+  bool m_httpStopping = false; // guarded by m_pendingHttpMutex
 #endif
 };
 
