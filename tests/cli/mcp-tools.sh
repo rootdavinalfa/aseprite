@@ -569,3 +569,78 @@ resp=$(run_tool '{"jsonrpc":"2.0","id":193,"method":"tools/call","params":{"name
 printf '%s' "$resp" | python3 -c 'import sys,json; t=json.load(sys.stdin)["result"]["content"][0]["text"]; assert t.startswith("#ff00ff"), repr(t)' || fail "text must land on the active layer: $resp"
 resp=$(run_tool '{"jsonrpc":"2.0","id":194,"method":"tools/call","params":{"name":"get_pixel_color","arguments":{"filename":"'$t'/text-active.aseprite","x":2,"y":3,"layer_name":"Layer 1"},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}')
 printf '%s' "$resp" | python3 -c 'import sys,json,re; t=json.load(sys.stdin)["result"]["content"][0]["text"]; m=re.search(r"a=(\d+)", t); assert m and m.group(1)=="0", repr(t)' || fail "text must not land on the bottom layer: $resp"
+
+echo "MCP tools: preview server serves exported files over HTTP"
+# The preview server runs inside the MCP process, so this session has to
+# stay alive (FIFO, like the cache test) while curl talks to the server.
+run_tool '{"jsonrpc":"2.0","id":200,"method":"tools/call","params":{"name":"export_frame","arguments":{"filename":"'$t'/c.aseprite","frame_index":1,"output_filename":"'$t'/preview.png"},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}' >/dev/null
+[ -f "$t/preview.png" ] || fail "preview fixture was not exported"
+
+mkfifo "$t/mcp-preview-in"
+"$ASEPRITE" --mcp < "$t/mcp-preview-in" > "$t/mcp-preview-out" 2>/dev/null &
+mcp_server=$!
+# Watchdog: if the test stalls, kill the server after 15s so the suite
+# can never hang on it. Disowned so it doesn't hold the test's stdout.
+( sleep 15; kill "$mcp_server" 2>/dev/null ) >/dev/null 2>&1 &
+mcp_watchdog=$!
+disown
+exec 3<> "$t/mcp-preview-in"
+
+# Sends one tool call to the session and waits for its reply.
+preview_send() { # id, tool, arguments-json
+    printf '{"jsonrpc":"2.0","id":%s,"method":"tools/call","params":{"name":"%s","arguments":%s,"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}\n' "$1" "$2" "$3" >&3
+    for i in $(seq 1 100); do
+        grep -q '"id":'"$1"',' "$t/mcp-preview-out" && return 0
+        sleep 0.1
+    done
+    return 1
+}
+
+preview_send 201 start_preview_server '{"directory":"'$t'","port":18100}' || fail "no reply to start_preview_server"
+grep -q '"id":201,"jsonrpc":"2.0","result"' "$t/mcp-preview-out" || fail "start_preview_server: $(cat "$t/mcp-preview-out")"
+
+served=$(curl -s --max-time 5 -o "$t/served.png" -w '%{http_code} %{content_type}' "http://127.0.0.1:18100/preview.png") || fail "curl could not reach the preview server"
+[ "$served" = "200 image/png" ] || fail "preview server served PNG: $served"
+python3 -c 'assert open("'$t'/served.png","rb").read(4) == b"\x89PNG"' || fail "served file is not a PNG"
+code=$(curl -s --max-time 5 --path-as-is -o /dev/null -w '%{http_code}' "http://127.0.0.1:18100/../../etc/hosts")
+[ "$code" = "403" ] || fail "preview path traversal should be 403, got $code"
+code=$(curl -s --max-time 5 -o /dev/null -w '%{http_code}' "http://127.0.0.1:18100/nope.png")
+[ "$code" = "404" ] || fail "missing preview file should be 404, got $code"
+
+preview_send 202 start_preview_server '{"directory":"'$t'","port":18100}' || fail "no reply to the second start_preview_server"
+preview_send 203 start_preview_server '{"directory":"'$t'/nope","port":18101}' || fail "no reply to the missing-directory start"
+preview_send 204 start_preview_server '{"directory":"'$t'","port":99999}' || fail "no reply to the invalid-port start"
+preview_send 205 stop_preview_server '{"port":18100}' || fail "no reply to stop_preview_server"
+
+# The port must be closed after the stop.
+curl -s --max-time 2 -o /dev/null "http://127.0.0.1:18100/preview.png" && fail "preview server still serving after stop"
+
+preview_send 206 stop_preview_server '{"port":18100}' || fail "no reply to the second stop_preview_server"
+
+exec 3>&-
+kill "$mcp_server" 2>/dev/null
+wait "$mcp_server" 2>/dev/null
+kill "$mcp_watchdog" 2>/dev/null
+
+python3 - "$t/mcp-preview-out" <<'PY' || fail "preview server replies: $(cat "$t/mcp-preview-out")"
+import json
+import sys
+
+replies = {}
+for line in open(sys.argv[1]):
+    line = line.strip()
+    if line:
+        m = json.loads(line)
+        replies[m["id"]] = m["result"]
+
+def text(i):
+    return replies[i]["content"][0]["text"]
+
+assert not replies[201]["isError"], replies[201]
+assert "18100" in text(201), text(201)
+assert replies[202]["isError"] and "already running" in text(202), text(202)
+assert replies[203]["isError"] and "not found" in text(203), text(203)
+assert replies[204]["isError"] and "Port" in text(204), text(204)
+assert not replies[205]["isError"] and "18100" in text(205), text(205)
+assert replies[206]["isError"] and "No preview server running" in text(206), text(206)
+PY

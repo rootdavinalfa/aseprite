@@ -15,6 +15,18 @@
 
 #include <string>
 
+#ifdef ENABLE_WEBSOCKET
+  #include "base/file_content.h"
+
+  #include <ixwebsocket/IXHttpServer.h>
+  #include <ixwebsocket/IXNetSystem.h>
+
+  #include <cctype>
+  #include <map>
+  #include <memory>
+  #include <mutex>
+#endif
+
 namespace app {
 namespace mcp {
 
@@ -26,6 +38,118 @@ std::string luaError(const std::string& message)
 {
   return "print(\"ERROR:" + luaString(message) + "\")";
 }
+
+#ifdef ENABLE_WEBSOCKET
+
+ix::HttpResponsePtr previewResponse(const int status, const char* description,
+                                    const std::string& body, const std::string& contentType)
+{
+  ix::WebSocketHttpHeaders headers;
+  headers["Content-Type"] = contentType;
+  return std::make_shared<ix::HttpResponse>(status, description, ix::HttpErrorCode::Ok,
+                                            headers, body);
+}
+
+std::string fileContentType(const std::string& filename)
+{
+  std::string ext = base::get_file_extension(filename);
+  for (char& c : ext)
+    c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+
+  if (ext == "html")
+    return "text/html";
+  if (ext == "png")
+    return "image/png";
+  if (ext == "gif")
+    return "image/gif";
+  if (ext == "json")
+    return "application/json";
+  return "application/octet-stream";
+}
+
+ix::HttpResponsePtr serveFile(const std::string& directory, const std::string& uri)
+{
+  // A query string/fragment is not part of the file name, and the site
+  // root maps to index.html.
+  std::string path = uri.substr(0, uri.find_first_of("?#"));
+  if (path.empty() || path == "/")
+    path = "/index.html";
+
+  // Only files inside "directory" are served (no ".." escapes).
+  const std::string root = base::normalize_path(directory);
+  const std::string filename = base::normalize_path(base::join_path(root, path));
+  std::string prefix = root;
+  if (prefix.empty() || !base::is_path_separator(prefix.back()))
+    prefix.push_back(base::path_separator);
+  if (filename.compare(0, prefix.size(), prefix) != 0)
+    return previewResponse(403, "Forbidden", "Forbidden", "text/plain");
+  if (!base::is_file(filename))
+    return previewResponse(404, "Not Found", "Not found", "text/plain");
+
+  const base::buffer data = base::read_file_content(filename);
+  return previewResponse(200, "OK", std::string(data.begin(), data.end()),
+                         fileContentType(filename));
+}
+
+// Serves the files of a directory over HTTP on 127.0.0.1, to preview
+// exported sprites. One instance owns one ix::HttpServer.
+class PreviewServer {
+public:
+  PreviewServer(const int port, const std::string& directory)
+  {
+    // The scripting WebSocket class initializes the net system on the
+    // first connection; do the same before creating the server.
+    static std::once_flag netOnce;
+    std::call_once(netOnce, &ix::initNetSystem);
+
+    auto server = std::make_unique<ix::HttpServer>(port, "127.0.0.1");
+    server->setOnConnectionCallback(
+      [directory](ix::HttpRequestPtr request,
+                  std::shared_ptr<ix::ConnectionState>) -> ix::HttpResponsePtr {
+        return serveFile(directory, request->uri);
+      });
+
+    const std::pair<bool, std::string> listenResult = server->listen();
+    if (!listenResult.first) {
+      m_error = listenResult.second;
+      return;
+    }
+
+    m_server = std::move(server);
+    m_server->start();
+  }
+
+  ~PreviewServer() { stop(); }
+
+  bool isRunning() const { return m_server != nullptr; }
+  const std::string& error() const { return m_error; }
+
+  void stop()
+  {
+    if (!m_server)
+      return;
+    m_server->stop();
+    m_server.reset();
+  }
+
+private:
+  std::unique_ptr<ix::HttpServer> m_server;
+  std::string m_error;
+};
+
+// Running servers by port. MCP tool calls are serialized in every
+// mode, so no lock is needed here.
+std::map<int, std::unique_ptr<PreviewServer>> previewServers;
+
+ToolResult previewError(const std::string& message)
+{
+  ToolResult result;
+  result.isError = true;
+  result.text = message;
+  return result;
+}
+
+#endif // ENABLE_WEBSOCKET
 
 } // anonymous namespace
 
@@ -229,6 +353,77 @@ void register_misc_tools(std::vector<McpTool>& tools)
         "done.";
       return result;
     }));
+
+#ifdef ENABLE_WEBSOCKET
+  tools.push_back(NativeTool(
+    "start_preview_server",
+    "Start a small HTTP server, bound to 127.0.0.1 only, that serves the files of a "
+    "directory (e.g. exported sprites) so they can be inspected in a browser. At most "
+    "one server per port; stop it with stop_preview_server. The server lives inside "
+    "Aseprite, so it stops when Aseprite exits.",
+    json11::Json::object {
+      { "type", "object" },
+      { "properties", json11::Json::object {
+        { "directory", json11::Json::object {
+            { "type", "string" },
+            { "description", "Directory to serve" } } },
+        { "port", json11::Json::object {
+            { "type", "integer" },
+            { "description", "TCP port to bind (default: 8000)" } } },
+      } },
+      { "required", json11::Json::array { "directory" } },
+    },
+    [](const json11::Json& args) -> ToolResult {
+      const std::string directory = argString(args, "directory");
+      const int port = argInt(args, "port", 8000);
+      if (port < 1 || port > 65535)
+        return previewError("Port must be between 1 and 65535");
+
+      const std::string absDirectory = base::get_absolute_path(directory);
+      if (!base::is_directory(absDirectory))
+        return previewError("Directory not found: " + directory);
+      if (previewServers.count(port))
+        return previewError("Preview server already running on port " + std::to_string(port));
+
+      std::unique_ptr<PreviewServer> server =
+        std::make_unique<PreviewServer>(port, absDirectory);
+      if (!server->isRunning())
+        return previewError("Cannot start preview server on port " + std::to_string(port) +
+                            ": " + server->error());
+      previewServers[port] = std::move(server);
+
+      ToolResult result;
+      result.text = "Preview server started: http://127.0.0.1:" + std::to_string(port) + "/";
+      return result;
+    }));
+
+  tools.push_back(NativeTool(
+    "stop_preview_server",
+    "Stop a preview HTTP server started with start_preview_server. The port must match "
+    "the one used to start it.",
+    json11::Json::object {
+      { "type", "object" },
+      { "properties", json11::Json::object {
+        { "port", json11::Json::object {
+            { "type", "integer" },
+            { "description", "TCP port of the server to stop (default: 8000)" } } },
+      } },
+      { "required", json11::Json::array {} },
+    },
+    [](const json11::Json& args) -> ToolResult {
+      const int port = argInt(args, "port", 8000);
+      const auto it = previewServers.find(port);
+      if (it == previewServers.end())
+        return previewError("No preview server running on port " + std::to_string(port));
+
+      it->second->stop();
+      previewServers.erase(it);
+
+      ToolResult result;
+      result.text = "Preview server stopped on port " + std::to_string(port);
+      return result;
+    }));
+#endif // ENABLE_WEBSOCKET
 }
 
 } // namespace mcp
