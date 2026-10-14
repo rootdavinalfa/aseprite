@@ -57,6 +57,17 @@ void stopHttp()
 #endif
 }
 
+// The error of the last failed start (e.g. the GUI auto-start at
+// launch), shown while the server is stopped.
+std::string lastHttpError()
+{
+#ifdef ENABLE_WEBSOCKET
+  return mcp::McpServer::instance()->lastHttpError();
+#else
+  return std::string();
+#endif
+}
+
 // Windows paths contain backslashes which are not valid JSON escapes.
 std::string escape_json_string(const std::string& s)
 {
@@ -191,7 +202,8 @@ void McpServerWindow::updateStatus(const std::string& error)
   }
   else {
     const std::string stopped = Strings::mcp_server_mcp_status_stopped();
-    status()->setText(error.empty() ? stopped : fmt::format("{}: {}", stopped, error));
+    const std::string message = error.empty() ? lastHttpError() : error;
+    status()->setText(message.empty() ? stopped : fmt::format("{}: {}", stopped, message));
     startStop()->setText(Strings::mcp_server_mcp_start());
   }
 

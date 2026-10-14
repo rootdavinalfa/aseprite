@@ -100,7 +100,9 @@ bool ToolContext::openDocument(const std::string& filename, std::string& error)
     return false;
   }
 
-  const std::string absFn = base::get_absolute_path(filename);
+  // Canonical identity: alternate spellings of the same file (symlinks,
+  // /tmp vs /private/tmp) must map to a single document/cache entry.
+  const std::string absFn = canonicalFilePath(filename);
   if (!base::is_file(absFn)) {
     error = "File " + filename + " not found";
     return false;
@@ -162,6 +164,23 @@ bool ToolContext::openDocument(const std::string& filename, std::string& error)
   m_cachedTime = fileTime;
   m_cachedSize = fileSize;
   return true;
+}
+
+void ToolContext::refreshCachedStat()
+{
+  if (!m_context || m_cachedFilename.empty() || !base::is_file(m_cachedFilename))
+    return;
+
+  // Only refresh a document with no unsaved changes: it is reused
+  // regardless of the file on disk, while the stat of an unmodified
+  // one is compared on the next call (external changes must still
+  // invalidate the cache).
+  Doc* doc = m_context->documents().getByFileName(m_cachedFilename);
+  if (!doc || doc->isModified())
+    return;
+
+  m_cachedTime = base::get_modification_time(m_cachedFilename);
+  m_cachedSize = base::file_size(m_cachedFilename);
 }
 
 ToolResult ToolContext::runLua(const std::string& code)

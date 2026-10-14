@@ -51,6 +51,14 @@ public:
   // or text starting with "ERROR:" yields an error ToolResult.
   ToolResult runLua(const std::string& code);
 
+  // Re-reads the modification time and size of the cached document
+  // after a tool ran: mutating tools end by saving the file themselves,
+  // so the stat recorded by openDocument() would otherwise look like an
+  // external modification on the next call. Does nothing when the
+  // document has unsaved changes (it is reused regardless of the file
+  // on disk) or the file no longer exists.
+  void refreshCachedStat();
+
 private:
   ToolContext() = default;
   DISABLE_COPYING(ToolContext);

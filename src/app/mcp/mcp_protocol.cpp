@@ -10,6 +10,7 @@
 
 #include "app/mcp/mcp_protocol.h"
 
+#include "app/mcp/mcp_tool_context.h"
 #include "app/mcp/mcp_tools_registry.h"
 #include "ver/info.h"
 
@@ -173,7 +174,14 @@ json11::Json handleToolsCall(const json11::Json& id, const Era era,
       }
     }
 
-    return toolResultJson(id, era, tool.run(arguments));
+    ToolResult result = tool.run(arguments);
+    if (!result.isError) {
+      // A successful tool may have saved its document; keep the cached
+      // stat in sync so the next call reuses the same document (and its
+      // undo history) instead of reloading it.
+      ToolContext::instance().refreshCachedStat();
+    }
+    return toolResultJson(id, era, result);
   }
   return makeError(id, -32602, "Unknown tool: " + name);
 }

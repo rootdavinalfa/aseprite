@@ -3,6 +3,8 @@
 //
 // This program is distributed under the terms of
 // the End-User License Agreement for Aseprite.
+//
+// Portions derived from diivi/aseprite-mcp (MIT); see THIRD_PARTY_NOTICES.md.
 
 #ifdef HAVE_CONFIG_H
   #include "config.h"
@@ -217,9 +219,11 @@ void register_misc_tools(std::vector<McpTool>& tools)
     [](const json11::Json& args) -> std::string {
       const std::string sourceFilename = argString(args, "source_filename");
       const std::string targetFilename = argString(args, "target_filename");
-      const std::string absSource = base::get_absolute_path(sourceFilename);
-      const std::string absTarget = base::get_absolute_path(targetFilename);
-      if (base::normalize_path(absSource) == base::normalize_path(absTarget))
+      // Canonical identity, so symlinked spellings of one file cannot be
+      // opened as two different sprites and clobber each other.
+      const std::string absSource = canonicalFilePath(sourceFilename);
+      const std::string absTarget = canonicalFilePath(targetFilename);
+      if (absSource == absTarget)
         return luaError("source and target must be different files");
       if (!base::is_file(absSource))
         return luaError("File " + sourceFilename + " not found");

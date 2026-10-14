@@ -119,6 +119,15 @@ bool isLoopbackOrigin(const std::string& origin)
   return false;
 }
 
+// "application/json" with optional parameters (e.g. "charset=utf-8").
+bool isJsonContentType(const std::string& value)
+{
+  const std::string type = "application/json";
+  return value.compare(0, type.size(), type) == 0 &&
+         (value.size() == type.size() || value[type.size()] == ';' ||
+          value[type.size()] == ' ' || value[type.size()] == '\t');
+}
+
 // Mcp-* header values can be carried base64 encoded with the
 // "=?base64?<data>?=" sentinel.
 std::string decodeMcpHeader(const std::string& value)
@@ -241,11 +250,13 @@ bool McpServer::startHttp(const int port, std::string& error)
   const std::pair<bool, std::string> listenResult = server->listen();
   if (!listenResult.first) {
     error = listenResult.second;
+    m_lastHttpError = error;
     return false;
   }
 
   m_httpServer = std::move(server);
   m_httpServer->start();
+  m_lastHttpError.clear();
   return true;
 }
 
@@ -284,6 +295,11 @@ void McpServer::removePendingHttpRequest(const std::shared_ptr<PendingHttpReques
 bool McpServer::isHttpRunning() const
 {
   return m_httpServer != nullptr;
+}
+
+std::string McpServer::lastHttpError() const
+{
+  return m_lastHttpError;
 }
 
 void McpServer::runHttpOnly(const int port)
@@ -339,6 +355,14 @@ ix::HttpResponsePtr McpServer::handleHttpRequest(const ix::HttpRequestPtr& reque
     const std::string metaVersion =
       body["params"]["_meta"]["io.modelcontextprotocol/protocolVersion"].string_value();
     const bool modern = !headerVersion.empty();
+
+    // A modern request body must be JSON (spec §7). Legacy clients may
+    // omit the header, so only the modern traffic is enforced here.
+    if ((modern || !metaVersion.empty()) &&
+        !isJsonContentType(headerValue(*request, "Content-Type"))) {
+      return httpErrorJson(415, "Unsupported Media Type", -32600,
+                           "Content-Type must be application/json", id);
+    }
 
     if (modern || !metaVersion.empty()) {
       const std::string mcpName = headerValue(*request, "Mcp-Name");
@@ -436,7 +460,9 @@ json11::Json McpServer::dispatchHttp(const json11::Json& request, const bool mod
     removePendingHttpRequest(pending);
     return protocol::makeError(request["id"], -32603, "Request timed out");
   }
-  if (pending->cancelled) {
+  // A response computed just before stopHttp() is returned as-is; only
+  // a request that never produced one is reported as cancelled.
+  if (pending->cancelled && !pending->done) {
     lock.unlock();
     removePendingHttpRequest(pending);
     return protocol::makeError(request["id"], -32603, "Server stopping");

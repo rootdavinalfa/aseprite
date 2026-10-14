@@ -51,6 +51,10 @@ public:
   void stopHttp();
   bool isHttpRunning() const;
 
+  // The error from the last failed startHttp() (empty after a
+  // successful start); the setup dialog shows it while stopped.
+  std::string lastHttpError() const;
+
   // Starts the HTTP server and blocks until the process is
   // terminated (used by the headless --mcp-http mode).
   void runHttpOnly(int port);
@@ -73,6 +77,7 @@ private:
 
   std::unique_ptr<ix::HttpServer> m_httpServer;
   std::mutex m_httpDispatchMutex;
+  std::string m_lastHttpError;
 
   std::vector<std::shared_ptr<PendingHttpRequest>> m_pendingHttp;
   std::mutex m_pendingHttpMutex;

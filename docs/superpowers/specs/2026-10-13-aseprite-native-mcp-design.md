@@ -197,7 +197,7 @@ Modern results include `_meta.io.modelcontextprotocol/serverInfo`. Legacy result
 
 ### Tool extraction step (first task of the implementation plan)
 
-Enumerate every registered tool of the reference server at pinned commit `90d1696a7e41edff89bbd0823ae6a5f86c114bcc` (20 modules under `aseprite_mcp/tools/`, 116 `@mcp.tool` registrations). For each: capture name, description intent, and input schema. Produce a mapping checklist: tool → handler kind → target file. Schemas are mirrored for compatibility; handler code and descriptions are written fresh against Aseprite's documented Lua API — no verbatim copying (diivi is MIT, this build ships under the Aseprite EULA; license hygiene).
+Enumerate every registered tool of the reference server at pinned commit `90d1696a7e41edff89bbd0823ae6a5f86c114bcc` (20 modules under `aseprite_mcp/tools/`, 116 `@mcp.tool` registrations). For each: capture name, description intent, and input schema. Produce a mapping checklist: tool → handler kind → target file. Schemas are mirrored for compatibility. Reference-derived Lua snippets and tool descriptions must carry the upstream MIT notice (see `src/app/mcp/THIRD_PARTY_NOTICES.md`); no verbatim copying of code without the notice.
 
 ### Document management
 

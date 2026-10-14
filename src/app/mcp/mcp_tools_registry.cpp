@@ -11,6 +11,7 @@
 #include "app/mcp/mcp_tools_registry.h"
 
 #include "app/mcp/mcp_tool_context.h"
+#include "base/fs.h"
 
 #include <cctype>
 
@@ -99,6 +100,13 @@ std::string luaString(const std::string& value)
     }
   }
   return out;
+}
+
+std::string canonicalFilePath(const std::string& filename)
+{
+  const std::string abs = base::get_absolute_path(filename);
+  const std::string canonical = base::get_canonical_path(abs);
+  return canonical.empty() ? abs : canonical;
 }
 
 McpTool LuaTool(std::string name,

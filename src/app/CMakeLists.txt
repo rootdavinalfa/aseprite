@@ -208,6 +208,7 @@ if(ENABLE_SCRIPTING)
     mcp/mcp_tools_canvas_draw.cpp
     mcp/mcp_tools_io.cpp
     mcp/mcp_tools_layers.cpp
+    mcp/mcp_tools_lua.h
     mcp/mcp_tools_misc.cpp
     mcp/mcp_tools_palette_transform.cpp
     mcp/mcp_tools_registry.cpp

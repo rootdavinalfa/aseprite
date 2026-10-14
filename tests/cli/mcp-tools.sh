@@ -154,6 +154,12 @@ printf '%s' "$resp" | python3 -c 'import sys,json; t=json.load(sys.stdin)["resul
 resp=$(run_tool '{"jsonrpc":"2.0","id":46,"method":"tools/call","params":{"name":"add_frames","arguments":{"filename":"'$t'/anim.aseprite","count":0},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}')
 printf '%s' "$resp" | python3 -c 'import sys,json; r=json.load(sys.stdin)["result"]; assert r["isError"], repr(r); assert "Count must be >= 1" in r["content"][0]["text"], repr(r)' || fail "add_frames count validation: $resp"
 
+echo "MCP tools: out-of-range source_frame_index is an error"
+resp=$(run_tool '{"jsonrpc":"2.0","id":47,"method":"tools/call","params":{"name":"set_cel_position","arguments":{"filename":"'$t'/anim.aseprite","layer_name":"Layer 1","frame_index":1,"x":0,"y":0,"source_frame_index":99},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}')
+printf '%s' "$resp" | python3 -c 'import sys,json; r=json.load(sys.stdin)["result"]; assert r["isError"], repr(r); assert "Source frame out of range" in r["content"][0]["text"], repr(r)' || fail "set_cel_position out-of-range source frame: $resp"
+resp=$(run_tool '{"jsonrpc":"2.0","id":48,"method":"tools/call","params":{"name":"tween_cel_positions","arguments":{"filename":"'$t'/anim.aseprite","layer_name":"Layer 1","start_frame":1,"end_frame":3,"start_x":0,"start_y":0,"end_x":2,"end_y":2,"source_frame_index":99},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}')
+printf '%s' "$resp" | python3 -c 'import sys,json; r=json.load(sys.stdin)["result"]; assert r["isError"], repr(r); assert "Source frame out of range" in r["content"][0]["text"], repr(r)' || fail "tween out-of-range source frame: $resp"
+
 echo "MCP tools: palette tools"
 run_tool '{"jsonrpc":"2.0","id":50,"method":"tools/call","params":{"name":"create_canvas","arguments":{"width":8,"height":8,"filename":"'$t'/pal.aseprite"},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}' >/dev/null
 run_tool '{"jsonrpc":"2.0","id":51,"method":"tools/call","params":{"name":"draw_pixels_at","arguments":{"filename":"'$t'/pal.aseprite","layer_name":"Layer 1","frame_index":1,"pixels":[{"x":1,"y":1,"color":"#123456"}]},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}' >/dev/null
@@ -651,3 +657,120 @@ a=$(run_list)
 b=$(run_list)
 [ "$a" = "$b" ] || fail "tools/list is not deterministic"
 printf '%s' "$a" | python3 -c 'import sys,json; r=json.load(sys.stdin); assert len(r["result"]["tools"])==116, len(r["result"]["tools"])' || fail "expected 116 tools"
+
+echo "MCP tools: undo history survives a saving tool's own save"
+# One server process serves all three requests: add_layer saves the file
+# itself, so without a post-run stat refresh the next call would reload
+# the document and app.undo() would have nothing to undo. (The drawing
+# tools write cel images directly, which Aseprite's undo history does
+# not capture, so the observable undoable change here is a new layer.)
+run_tool '{"jsonrpc":"2.0","id":208,"method":"tools/call","params":{"name":"create_canvas","arguments":{"width":8,"height":8,"filename":"'$t'/undo-keep.aseprite"},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}' >/dev/null
+
+mkfifo "$t/mcp-undo-keep-in"
+"$ASEPRITE" --mcp < "$t/mcp-undo-keep-in" > "$t/mcp-undo-keep-out" 2>/dev/null &
+mcp_server=$!
+# Watchdog: if the test stalls, kill the server after 15s so the suite
+# can never hang on it. Disowned so it doesn't hold the test's stdout.
+( sleep 15; kill "$mcp_server" 2>/dev/null ) >/dev/null 2>&1 &
+mcp_watchdog=$!
+disown
+exec 3<> "$t/mcp-undo-keep-in"
+
+printf '{"jsonrpc":"2.0","id":210,"method":"tools/call","params":{"name":"add_layer","arguments":{"filename":"%s/undo-keep.aseprite","layer_name":"ink"},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}\n' "$t" >&3
+for i in $(seq 1 100); do
+    grep -q '"id":210,' "$t/mcp-undo-keep-out" && break
+    sleep 0.1
+done
+grep -q '"id":210,' "$t/mcp-undo-keep-out" || fail "no reply to add_layer: $(cat "$t/mcp-undo-keep-out")"
+
+printf '{"jsonrpc":"2.0","id":211,"method":"tools/call","params":{"name":"run_lua_script","arguments":{"filename":"%s/undo-keep.aseprite","script":"app.undo()"},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}\n' "$t" >&3
+for i in $(seq 1 100); do
+    grep -q '"id":211,' "$t/mcp-undo-keep-out" && break
+    sleep 0.1
+done
+grep -q '"id":211,' "$t/mcp-undo-keep-out" || fail "no reply to undo: $(cat "$t/mcp-undo-keep-out")"
+
+printf '{"jsonrpc":"2.0","id":212,"method":"tools/call","params":{"name":"get_sprite_info","arguments":{"filename":"%s/undo-keep.aseprite"},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}\n' "$t" >&3
+for i in $(seq 1 100); do
+    grep -q '"id":212,' "$t/mcp-undo-keep-out" && break
+    sleep 0.1
+done
+exec 3>&-
+kill "$mcp_server" 2>/dev/null
+wait "$mcp_server" 2>/dev/null
+kill "$mcp_watchdog" 2>/dev/null
+
+python3 -c 'import json,sys
+replies = {}
+for line in open(sys.argv[1]):
+    line = line.strip()
+    if line:
+        m = json.loads(line)
+        replies[m["id"]] = m["result"]
+assert not replies[210]["isError"], replies[210]
+assert not replies[211]["isError"], replies[211]
+assert not replies[212]["isError"], replies[212]
+info = json.loads(replies[212]["content"][0]["text"])
+names = [l["name"] for l in info["layers"]]
+assert "ink" not in names, names' "$t/mcp-undo-keep-out" || fail "undo did not remove the saving tool's layer (document was reloaded): $(cat "$t/mcp-undo-keep-out")"
+
+echo "MCP tools: symlink spellings of one file share the document"
+if [[ "$(uname)" =~ "MINGW" ]] || [[ "$(uname)" =~ "MSYS" ]] ; then
+    echo "Ignore symlink-spelling test on Windows"
+else
+    run_tool '{"jsonrpc":"2.0","id":219,"method":"tools/call","params":{"name":"create_canvas","arguments":{"width":8,"height":8,"filename":"'$t'/canon.aseprite"},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}' >/dev/null
+    if ln -s "$t" "$t/alias" 2>/dev/null && [ -L "$t/alias" ]; then
+        mkfifo "$t/mcp-canon-in"
+        "$ASEPRITE" --mcp < "$t/mcp-canon-in" > "$t/mcp-canon-out" 2>/dev/null &
+        mcp_server=$!
+        # Watchdog: if the test stalls, kill the server after 15s so the
+        # suite can never hang on it. Disowned so it doesn't hold the
+        # test's stdout.
+        ( sleep 15; kill "$mcp_server" 2>/dev/null ) >/dev/null 2>&1 &
+        mcp_watchdog=$!
+        disown
+        exec 3<> "$t/mcp-canon-in"
+
+        printf '{"jsonrpc":"2.0","id":220,"method":"tools/call","params":{"name":"add_layer","arguments":{"filename":"%s/canon.aseprite","layer_name":"ink"},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}\n' "$t" >&3
+        for i in $(seq 1 100); do
+            grep -q '"id":220,' "$t/mcp-canon-out" && break
+            sleep 0.1
+        done
+        grep -q '"id":220,' "$t/mcp-canon-out" || fail "no reply to canonical add_layer: $(cat "$t/mcp-canon-out")"
+
+        # The undo goes through the symlinked spelling; it can only
+        # undo the layer when both spellings are the same document.
+        printf '{"jsonrpc":"2.0","id":221,"method":"tools/call","params":{"name":"run_lua_script","arguments":{"filename":"%s/alias/canon.aseprite","script":"app.undo()"},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}\n' "$t" >&3
+        for i in $(seq 1 100); do
+            grep -q '"id":221,' "$t/mcp-canon-out" && break
+            sleep 0.1
+        done
+        grep -q '"id":221,' "$t/mcp-canon-out" || fail "no reply to aliased undo: $(cat "$t/mcp-canon-out")"
+
+        printf '{"jsonrpc":"2.0","id":222,"method":"tools/call","params":{"name":"get_sprite_info","arguments":{"filename":"%s/alias/canon.aseprite"},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}\n' "$t" >&3
+        for i in $(seq 1 100); do
+            grep -q '"id":222,' "$t/mcp-canon-out" && break
+            sleep 0.1
+        done
+        exec 3>&-
+        kill "$mcp_server" 2>/dev/null
+        wait "$mcp_server" 2>/dev/null
+        kill "$mcp_watchdog" 2>/dev/null
+
+        python3 -c 'import json,sys
+replies = {}
+for line in open(sys.argv[1]):
+    line = line.strip()
+    if line:
+        m = json.loads(line)
+        replies[m["id"]] = m["result"]
+assert not replies[220]["isError"], replies[220]
+assert not replies[221]["isError"], replies[221]
+assert not replies[222]["isError"], replies[222]
+info = json.loads(replies[222]["content"][0]["text"])
+names = [l["name"] for l in info["layers"]]
+assert "ink" not in names, names' "$t/mcp-canon-out" || fail "symlink spelling opened a second document: $(cat "$t/mcp-canon-out")"
+    else
+        echo "Ignore symlink-spelling test (cannot create symlinks)"
+    fi
+fi

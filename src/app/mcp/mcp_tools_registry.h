@@ -66,6 +66,10 @@ bool parseHexColor(const std::string& value, int& r, int& g, int& b, int& a);
 // Escapes a string for use inside a Lua double-quoted literal.
 std::string luaString(const std::string& value);
 
+// Absolute path with symlinks/aliases resolved (base::get_canonical_path),
+// falling back to the plain absolute path when the file does not exist.
+std::string canonicalFilePath(const std::string& filename);
+
 void register_canvas_draw_tools(std::vector<McpTool>& tools);
 void register_layers_tools(std::vector<McpTool>& tools);
 void register_animation_tools(std::vector<McpTool>& tools);

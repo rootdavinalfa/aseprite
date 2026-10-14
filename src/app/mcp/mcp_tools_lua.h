@@ -3,6 +3,8 @@
 //
 // This program is distributed under the terms of
 // the End-User License Agreement for Aseprite.
+//
+// Portions derived from diivi/aseprite-mcp (MIT); see THIRD_PARTY_NOTICES.md.
 
 #ifndef APP_MCP_MCP_TOOLS_LUA_H_INCLUDED
 #define APP_MCP_MCP_TOOLS_LUA_H_INCLUDED

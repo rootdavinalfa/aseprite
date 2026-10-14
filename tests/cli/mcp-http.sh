@@ -65,6 +65,14 @@ code=$(curl -s --max-time 10 -o "$t/out" -w '%{http_code}' -X POST "http://127.0
 grep -q '\-32022' "$t/out" || fail "expected UnsupportedProtocolVersion"
 grep -q '"supported":\["2026-07-28"\]' "$t/out" || fail "expected supported list"
 
+echo "MCP http: non-JSON Content-Type -> 415"
+code=$(curl -s --max-time 10 -o "$t/out" -w '%{http_code}' -X POST "http://127.0.0.1:$PORT/mcp" \
+  -H 'Content-Type: text/plain' -H 'MCP-Protocol-Version: 2026-07-28' \
+  -H 'Mcp-Method: server/discover' \
+  -d '{"jsonrpc":"2.0","id":11,"method":"server/discover","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}')
+[ "$code" = "415" ] || fail "non-JSON Content-Type should be 415, got $code"
+grep -q '\-32600' "$t/out" || fail "expected invalid-request error body: $(cat "$t/out")"
+
 echo "MCP http: GET/DELETE -> 405; unknown path -> 404; unknown method -> 404; notification -> 202"
 code=$(curl -s --max-time 10 -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT/mcp")
 [ "$code" = "405" ] || fail "GET should be 405, got $code"

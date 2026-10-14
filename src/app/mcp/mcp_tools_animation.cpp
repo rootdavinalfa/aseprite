@@ -3,6 +3,8 @@
 //
 // This program is distributed under the terms of
 // the End-User License Agreement for Aseprite.
+//
+// Portions derived from diivi/aseprite-mcp (MIT); see THIRD_PARTY_NOTICES.md.
 
 #ifdef HAVE_CONFIG_H
   #include "config.h"
@@ -142,12 +144,17 @@ std::string layerLookup(const std::string& layerName)
 }
 
 // Resolves the optional source frame into the local "src", defaulting
-// to the expression in "defaultExpr" when absent.
+// to the expression in "defaultExpr" when absent. An explicit source
+// frame outside the frame range is an error (a blank cel would silently
+// replace the intended copy source).
 std::string sourceFrameLookup(const Json& args, const char* defaultExpr)
 {
   const std::string literal = optionalIntLiteral(args, "source_frame_index");
   return "local src = " + literal + "\n"
-         "if src == nil then src = " + std::string(defaultExpr) + " end\n";
+         "if src == nil then src = " + std::string(defaultExpr) + " end\n"
+         "if src < 1 or src > #spr.frames then\n"
+         "  print(\"ERROR:Source frame out of range\") return\n"
+         "end\n";
 }
 
 // Creates the cel of a layer/frame, cloning the cel at "source_frame"
@@ -1280,10 +1287,7 @@ print(json.encode({
       script += layerLookup(argString(args, "layer_name"));
       script += easeFunction(easing);
       script += sourceFrameLookup(args, "start_idx");
-      script += "if src < 1 or src > #spr.frames then\n"
-                "  print(\"ERROR:Source frame out of range\") return\n"
-                "end\n"
-                "local base_cel = target:cel(spr.frames[src])\n"
+      script += "local base_cel = target:cel(spr.frames[src])\n"
                 "if not base_cel then print(\"ERROR:Source cel not found\") return end\n"
                 "\n"
                 "local base_img = base_cel.image:clone()\n"
