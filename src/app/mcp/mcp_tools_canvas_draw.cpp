@@ -687,7 +687,12 @@ void register_canvas_draw_tools(std::vector<McpTool>& tools)
       const std::string filename = argString(args, "filename", "canvas.aseprite");
       return "local spr = Sprite(" + std::to_string(width) + ", " + std::to_string(height) + ")\n"
              "spr:saveAs(\"" + luaString(filename) + "\")\n"
-             "print(\"" + luaString(filename) + "\")";
+             "print(\"" + luaString(filename) + "\")\n"
+             // A freshly created file doesn't need to stay open in a
+             // tab (repeated calls would pile up one document per
+             // call); reopen it through the normal document path when
+             // a tool needs it.
+             "pcall(function() spr:close() end)";
     }));
 
   tools.push_back(LuaTool(

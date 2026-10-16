@@ -10,6 +10,10 @@
 
 #include "app/ui/optional_alert.h"
 
+#ifdef ENABLE_SCRIPTING
+  #include "app/script/security.h"
+#endif
+
 #include "app/i18n/strings.h"
 #include "ui/alert.h"
 #include "ui/button.h"
@@ -19,6 +23,14 @@ namespace app {
 // static
 int OptionalAlert::show(Option<bool>& option, const int optionWhenDisabled, const std::string& msg)
 {
+#ifdef ENABLE_SCRIPTING
+  // Server-driven script execution (MCP tool calls): there is no user
+  // able to answer the alert; behave as if the warning option were
+  // disabled and use the non-interactive default.
+  if (script::hasFullAccess())
+    return optionWhenDisabled;
+#endif
+
   if (!option())
     return optionWhenDisabled;
 

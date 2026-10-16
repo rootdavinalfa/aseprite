@@ -774,3 +774,53 @@ assert "ink" not in names, names' "$t/mcp-canon-out" || fail "symlink spelling o
         echo "Ignore symlink-spelling test (cannot create symlinks)"
     fi
 fi
+
+echo "MCP tools: repeated create/edit calls keep exactly one document"
+
+mkfifo "$t/mcp-tabs-in"
+"$ASEPRITE" --mcp < "$t/mcp-tabs-in" > "$t/mcp-tabs-out" 2>/dev/null &
+mcp_server=$!
+# Watchdog: if the test stalls, kill the server after 15s so the suite
+# can never hang on it. Disowned so it doesn't hold the test's stdout.
+( sleep 15; kill "$mcp_server" 2>/dev/null ) >/dev/null 2>&1 &
+mcp_watchdog=$!
+disown
+exec 3<> "$t/mcp-tabs-in"
+
+send_tabs() {
+    printf '%s\n' "$1" >&3
+    for i in $(seq 1 100); do
+        grep -q "\"id\":$2," "$t/mcp-tabs-out" && break
+        sleep 0.1
+    done
+    grep -q "\"id\":$2," "$t/mcp-tabs-out" || fail "no reply to id $2: $(cat "$t/mcp-tabs-out")"
+}
+
+send_tabs '{"jsonrpc":"2.0","id":230,"method":"tools/call","params":{"name":"create_canvas","arguments":{"width":16,"height":16,"filename":"'$t'/tabs.aseprite"},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}' 230
+send_tabs '{"jsonrpc":"2.0","id":231,"method":"tools/call","params":{"name":"create_canvas","arguments":{"width":16,"height":16,"filename":"'$t'/tabs.aseprite"},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}' 231
+send_tabs '{"jsonrpc":"2.0","id":232,"method":"tools/call","params":{"name":"get_sprite_info","arguments":{"filename":"'$t'/tabs.aseprite"},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}' 232
+send_tabs '{"jsonrpc":"2.0","id":233,"method":"tools/call","params":{"name":"draw_rectangle","arguments":{"filename":"'$t'/tabs.aseprite","x":1,"y":1,"width":4,"height":4,"color":"#FF0000","fill":true},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}' 233
+send_tabs '{"jsonrpc":"2.0","id":234,"method":"tools/call","params":{"name":"run_lua_script","arguments":{"script":"print(\"COUNT=\"..#app.sprites)"},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}' 234
+# An export creates a temporary clone sprite; it must not leave a
+# document behind either.
+send_tabs '{"jsonrpc":"2.0","id":235,"method":"tools/call","params":{"name":"export_frame","arguments":{"filename":"'$t'/tabs.aseprite","frame_index":1,"output_filename":"'$t'/tabs-exp.png","scale":2},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}' 235
+send_tabs '{"jsonrpc":"2.0","id":236,"method":"tools/call","params":{"name":"run_lua_script","arguments":{"script":"print(\"COUNT=\"..#app.sprites)"},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}' 236
+
+exec 3>&-
+kill "$mcp_server" 2>/dev/null
+wait "$mcp_server" 2>/dev/null
+kill "$mcp_watchdog" 2>/dev/null
+
+python3 -c 'import json,sys
+replies = {}
+for line in open(sys.argv[1]):
+    line = line.strip()
+    if line:
+        m = json.loads(line)
+        replies[m["id"]] = m["result"]
+for k in (230, 231, 232, 233, 234, 235, 236):
+    assert not replies[k]["isError"], (k, replies[k])
+count_text = replies[234]["content"][0]["text"]
+assert "COUNT=1" in count_text, count_text
+count_text = replies[236]["content"][0]["text"]
+assert "COUNT=1" in count_text, count_text' "$t/mcp-tabs-out" || fail "repeated calls left extra documents: $(cat "$t/mcp-tabs-out")"

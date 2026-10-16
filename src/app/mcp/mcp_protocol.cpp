@@ -165,7 +165,12 @@ json11::Json handleToolsCall(const json11::Json& id, const Era era,
       }
     }
 
+    const std::vector<Doc*> openBefore = ToolContext::instance().openDocuments();
     ToolResult result = tool.run(arguments);
+    // Temporary documents created by the tool (clone sprites, scratch
+    // docs opened by snippets) must not pile up; the target document
+    // and unsaved work are preserved by closeNewDocuments().
+    ToolContext::instance().closeNewDocuments(openBefore);
     if (!result.isError) {
       // A successful tool may have saved its document; keep the cached
       // stat in sync so the next call reuses the same document (and its

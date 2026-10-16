@@ -20,10 +20,12 @@
 #include <mutex>
 #include <optional>
 #include <string>
+#include <vector>
 
 namespace app {
 
 class Context;
+class Doc;
 
 namespace script {
 class Engine;
@@ -59,9 +61,24 @@ public:
   // on disk) or the file no longer exists.
   void refreshCachedStat();
 
+  // Snapshot of the open documents, used to detect temporary documents
+  // (e.g. clones created by a Lua snippet) opened during a tool call.
+  std::vector<Doc*> openDocuments() const;
+
+  // Destroys every document opened after the given snapshot, except
+  // the tool's cached target document. Tool scripts are file-driven
+  // (batch semantics): clone sprites and scratch documents must not
+  // pile up as tabs between calls.
+  void closeNewDocuments(const std::vector<Doc*>& before);
+
 private:
   ToolContext() = default;
   DISABLE_COPYING(ToolContext);
+
+  // Finds the document already open for the given canonical path.
+  // Compares canonical spellings of open document names, so symlinked
+  // or /tmp-vs-/private/tmp spellings map to one document.
+  Doc* findOpenDocument(const std::string& absFn) const;
 
   script::Engine* m_engine = nullptr;
   Context* m_context = nullptr;
@@ -72,6 +89,11 @@ private:
   std::string m_cachedFilename;
   std::optional<base::Time> m_cachedTime;
   std::size_t m_cachedSize = 0;
+
+  // The document instance the cache refers to. Identity (not the file
+  // name) distinguishes it from temporary clones, which inherit the
+  // source document's name.
+  Doc* m_cachedDoc = nullptr;
 };
 
 } // namespace mcp

@@ -317,6 +317,11 @@ ScopedFullAccess::~ScopedFullAccess()
   --g_fullAccessCount;
 }
 
+bool hasFullAccess()
+{
+  return g_fullAccessCount > 0;
+}
+
 bool ask_access(lua_State* L,
                 const char* filename,
                 const FileAccessMode mode,

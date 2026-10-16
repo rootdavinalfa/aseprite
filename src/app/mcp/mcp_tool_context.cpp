@@ -94,6 +94,15 @@ ToolContext& ToolContext::instance()
   return context;
 }
 
+Doc* ToolContext::findOpenDocument(const std::string& absFn) const
+{
+  for (Doc* doc : m_context->documents()) {
+    if (canonicalFilePath(doc->filename()) == absFn)
+      return doc;
+  }
+  return nullptr;
+}
+
 bool ToolContext::openDocument(const std::string& filename, std::string& error)
 {
   if (!m_context) {
@@ -117,10 +126,11 @@ bool ToolContext::openDocument(const std::string& filename, std::string& error)
   // reload below doesn't resurrect it). The size is compared too
   // because the modification time is only second-granular.
   std::vector<int> activeLayerPath;
-  if (Doc* doc = m_context->documents().getByFileName(absFn)) {
+  if (Doc* doc = findOpenDocument(absFn)) {
     if (doc->isModified() ||
         (m_cachedFilename == absFn && m_cachedTime && *m_cachedTime == fileTime &&
          m_cachedSize == fileSize)) {
+      m_cachedDoc = doc;
       m_context->setActiveDocument(doc);
       return true;
     }
@@ -130,6 +140,8 @@ bool ToolContext::openDocument(const std::string& filename, std::string& error)
     // chosen in this session (set_layer) so the reload keeps it.
     activeLayerPath = layerPath(doc->sprite(), m_context->activeSite().layer());
 
+    if (m_cachedDoc == doc)
+      m_cachedDoc = nullptr;
     m_cachedFilename.clear();
     m_cachedTime.reset();
 
@@ -140,6 +152,7 @@ bool ToolContext::openDocument(const std::string& filename, std::string& error)
     catch (const LockedDocException&) {
       // Cannot drop it while another operation holds it; return the
       // stale document rather than failing the whole tool call.
+      m_cachedDoc = doc;
       m_context->setActiveDocument(doc);
       return true;
     }
@@ -164,7 +177,47 @@ bool ToolContext::openDocument(const std::string& filename, std::string& error)
   m_cachedFilename = absFn;
   m_cachedTime = fileTime;
   m_cachedSize = fileSize;
+  m_cachedDoc = doc;
   return true;
+}
+
+std::vector<Doc*> ToolContext::openDocuments() const
+{
+  std::vector<Doc*> docs;
+  if (m_context) {
+    for (Doc* doc : m_context->documents())
+      docs.push_back(doc);
+  }
+  return docs;
+}
+
+void ToolContext::closeNewDocuments(const std::vector<Doc*>& before)
+{
+  if (!m_context)
+    return;
+
+  std::vector<Doc*> current;
+  for (Doc* doc : m_context->documents())
+    current.push_back(doc);
+
+  for (Doc* doc : current) {
+    if (std::find(before.begin(), before.end(), doc) != before.end())
+      continue; // Was already open before the tool call
+
+    // The tool's target document (by identity: clones inherit the
+    // source's file name) stays open, with its undo history, for the
+    // next call.
+    if (doc == m_cachedDoc)
+      continue;
+
+    try {
+      DocDestroyer destroyer(m_context, doc, 500);
+      destroyer.destroyDocument();
+    }
+    catch (const LockedDocException&) {
+      // Leave the document open rather than failing the tool call.
+    }
+  }
 }
 
 void ToolContext::refreshCachedStat()
@@ -176,8 +229,24 @@ void ToolContext::refreshCachedStat()
   // regardless of the file on disk, while the stat of an unmodified
   // one is compared on the next call (external changes must still
   // invalidate the cache).
-  Doc* doc = m_context->documents().getByFileName(m_cachedFilename);
-  if (!doc || doc->isModified())
+  Doc* doc = m_cachedDoc;
+  bool stillOpen = false;
+  if (doc) {
+    for (Doc* open : m_context->documents()) {
+      if (open == doc) {
+        stillOpen = true;
+        break;
+      }
+    }
+  }
+  if (!stillOpen) {
+    // The document was closed behind our back (e.g. by a script).
+    m_cachedDoc = nullptr;
+    m_cachedFilename.clear();
+    m_cachedTime.reset();
+    return;
+  }
+  if (doc->isModified())
     return;
 
   m_cachedTime = base::get_modification_time(m_cachedFilename);
