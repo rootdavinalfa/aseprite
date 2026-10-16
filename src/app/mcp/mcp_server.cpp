@@ -348,26 +348,45 @@ ix::HttpResponsePtr McpServer::handleHttpRequest(const ix::HttpRequestPtr& reque
     const json11::Json id = body["id"];
     const std::string method = body["method"].string_value();
 
-    // A modern request carries the protocol version in the header
-    // and/or in the body _meta: when both are present they must agree,
-    // and the Mcp-* headers must match the body values.
+    // The protocol version VALUE selects the dialect: 2026-07-28 is the
+    // modern era; the legacy revisions (2024-11-05..2025-11-25) use the
+    // initialize handshake and their spec requires them to send their
+    // own MCP-Protocol-Version header too — classifying by header
+    // presence alone would wrongly demand the modern Mcp-* mirror
+    // headers from every real legacy client.
     const std::string headerVersion = headerValue(*request, "MCP-Protocol-Version");
     const std::string metaVersion =
       body["params"]["_meta"]["io.modelcontextprotocol/protocolVersion"].string_value();
-    const bool modern = !headerVersion.empty();
+    const bool headerModern = (headerVersion == protocol::kModernVersion);
+    const bool headerLegacy = protocol::isLegacyVersion(headerVersion);
+    const bool metaModern = !metaVersion.empty();
+    const bool modern = headerModern || metaModern;
 
-    // A modern request body must be JSON (spec §7). Legacy clients may
-    // omit the header, so only the modern traffic is enforced here.
-    if ((modern || !metaVersion.empty()) &&
-        !isJsonContentType(headerValue(*request, "Content-Type"))) {
+    if (!headerVersion.empty() && !headerModern && !headerLegacy) {
+      return httpErrorJson(400, "Bad Request", -32022, "Unsupported protocol version", id,
+                           json11::Json::object {
+                             { "supported", json11::Json::array { protocol::kModernVersion } },
+                           });
+    }
+
+    // Contradictory era claims in one request are a header mismatch.
+    if (headerLegacy && metaModern)
+      return httpErrorJson(400, "Bad Request", -32020, "HeaderMismatch", id);
+
+    // A modern request body must be JSON (spec §7). Legacy requests stay
+    // permissive.
+    if (modern && !isJsonContentType(headerValue(*request, "Content-Type"))) {
       return httpErrorJson(415, "Unsupported Media Type", -32600,
                            "Content-Type must be application/json", id);
     }
 
-    if (modern || !metaVersion.empty()) {
+    // The Mcp-* mirror headers exist only in the modern revision; they
+    // are validated when the client presented the modern version header
+    // (a header-less modern request that carries only _meta is served
+    // without them).
+    if (headerModern) {
       const std::string mcpName = headerValue(*request, "Mcp-Name");
       const bool mismatch =
-        headerVersion.empty() ||
         (!metaVersion.empty() && metaVersion != headerVersion) ||
         headerValue(*request, "Mcp-Method") != method ||
         (method == "tools/call" &&
@@ -375,13 +394,6 @@ ix::HttpResponsePtr McpServer::handleHttpRequest(const ix::HttpRequestPtr& reque
           decodeMcpHeader(mcpName) != body["params"]["name"].string_value()));
       if (mismatch)
         return httpErrorJson(400, "Bad Request", -32020, "HeaderMismatch", id);
-
-      if (headerVersion != protocol::kModernVersion) {
-        return httpErrorJson(400, "Bad Request", -32022, "Unsupported protocol version", id,
-                             json11::Json::object {
-                               { "supported", json11::Json::array { protocol::kModernVersion } },
-                             });
-      }
     }
 
     const json11::Json response = dispatchHttp(body, modern);

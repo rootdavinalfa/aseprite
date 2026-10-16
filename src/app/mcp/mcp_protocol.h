@@ -26,6 +26,10 @@ extern const char kModernVersion[];
 extern const char* const kLegacyVersions[];
 extern const char kDefaultLegacyVersion[];
 
+// True when the version string is one of the supported legacy revisions
+// (served through the initialize handshake).
+bool isLegacyVersion(const std::string& version);
+
 // Era is detected per request: modern requests carry the protocol
 // version in params._meta, anything else falls back to legacy.
 Era detectEra(const json11::Json& request);

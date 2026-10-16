@@ -95,6 +95,23 @@ resp=$(curl -s --max-time 10 -X POST "http://127.0.0.1:$PORT/mcp" -H 'Content-Ty
   -d '{"jsonrpc":"2.0","id":5,"method":"initialize","params":{"protocolVersion":"2025-06-18"}}')
 echo "$resp" | grep -q '"protocolVersion":"2025-06-18"' || fail "legacy http initialize: $resp"
 
+echo "MCP http: legacy initialize WITH its version header (real 2025-11-25 client)"
+resp=$(curl -s --max-time 10 -X POST "http://127.0.0.1:$PORT/mcp" -H 'Content-Type: application/json' \
+  -H 'MCP-Protocol-Version: 2025-11-25' \
+  -d '{"jsonrpc":"2.0","id":51,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"opencode","version":"2.0.29"}}}')
+echo "$resp" | grep -q '"protocolVersion":"2025-11-25"' || fail "legacy init with version header: $resp"
+
+echo "MCP http: legacy tools/list WITH its version header"
+resp=$(curl -s --max-time 10 -X POST "http://127.0.0.1:$PORT/mcp" -H 'Content-Type: application/json' \
+  -H 'MCP-Protocol-Version: 2025-11-25' \
+  -d '{"jsonrpc":"2.0","id":52,"method":"tools/list"}')
+echo "$resp" | grep -q '"tools":\[' || fail "legacy tools/list with version header: $resp"
+
+echo "MCP http: modern body _meta without the version header is served"
+resp=$(curl -s --max-time 10 -X POST "http://127.0.0.1:$PORT/mcp" -H 'Content-Type: application/json' \
+  -d '{"jsonrpc":"2.0","id":53,"method":"server/discover","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}')
+echo "$resp" | grep -q '"supportedVersions"' || fail "meta-only discover: $resp"
+
 echo "MCP http: bad Origin -> 403"
 code=$(curl -s --max-time 10 -o /dev/null -w '%{http_code}' -X POST "http://127.0.0.1:$PORT/mcp" \
   -H 'Origin: http://evil.example' -H 'Content-Type: application/json' \

@@ -88,15 +88,6 @@ json11::Json handleDiscover(const json11::Json& id)
   });
 }
 
-bool isLegacyVersion(const std::string& version)
-{
-  for (const char* const supported : kLegacyVersions) {
-    if (version == supported)
-      return true;
-  }
-  return false;
-}
-
 // Legacy handshake: echo the requested version when supported,
 // otherwise reply with the fallback version.
 json11::Json handleInitialize(const json11::Json& id, const json11::Json& params)
@@ -187,6 +178,15 @@ json11::Json handleToolsCall(const json11::Json& id, const Era era,
 }
 
 } // anonymous namespace
+
+bool isLegacyVersion(const std::string& version)
+{
+  for (const char* const supported : kLegacyVersions) {
+    if (version == supported)
+      return true;
+  }
+  return false;
+}
 
 Era detectEra(const json11::Json& request)
 {
