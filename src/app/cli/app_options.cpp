@@ -13,6 +13,7 @@
 
 #include "base/fs.h"
 
+#include <cstdlib>
 #include <iostream>
 
 namespace app {
@@ -21,12 +22,19 @@ AppOptions::AppOptions(int argc, const char* argv[])
   : m_exeName(base::get_file_name(argv[0]))
   , m_startUI(true)
   , m_startShell(false)
+  , m_startMcp(false)
+  , m_startMcpHttp(false)
+  , m_mcpHttpPort(0)
   , m_previewCLI(false)
   , m_showHelp(false)
   , m_showVersion(false)
   , m_verboseLevel(kNoVerbose)
 #ifdef ENABLE_SCRIPTING
   , m_shell(m_po.add("shell").description("Start an interactive console to execute scripts"))
+  , m_mcp(m_po.add("mcp").description("Start the MCP server on stdio"))
+  , m_mcpHttp(m_po.add("mcp-http")
+                .requiresValue("<port>")
+                .description("Start the MCP server on an HTTP port"))
 #endif
   , m_batch(m_po.add("batch").mnemonic('b').description("Do not start the UI"))
   , m_preview(m_po.add("preview").mnemonic('p').description(
@@ -188,12 +196,38 @@ AppOptions::AppOptions(int argc, const char* argv[])
 
 #ifdef ENABLE_SCRIPTING
     m_startShell = m_po.enabled(m_shell);
+    m_startMcp = m_po.enabled(m_mcp);
+    m_startMcpHttp = m_po.enabled(m_mcpHttp);
+    if (m_startMcpHttp) {
+  #ifndef ENABLE_WEBSOCKET
+      std::cerr << m_exeName
+                << ": --mcp-http is not supported in this build "
+                   "(built without websocket support)\n";
+      std::exit(1);
+  #else
+      const std::string portValue = m_po.value_of(m_mcpHttp);
+      char* end = nullptr;
+      const long port = strtol(portValue.c_str(), &end, 10);
+      if (end == portValue.c_str() || *end != '\0' || port < 1 || port > 65535) {
+        std::cerr << m_exeName << ": --mcp-http needs a port between 1 and 65535\n";
+        std::exit(1);
+      }
+      m_mcpHttpPort = static_cast<int>(port);
+  #endif
+    }
+
+    if (static_cast<int>(m_startShell) + static_cast<int>(m_startMcp) +
+          static_cast<int>(m_startMcpHttp) > 1) {
+      std::cerr << m_exeName << ": --shell, --mcp, and --mcp-http can't be used together\n";
+      std::exit(1);
+    }
 #endif
     m_previewCLI = m_po.enabled(m_preview);
     m_showHelp = m_po.enabled(m_help);
     m_showVersion = m_po.enabled(m_version);
 
-    if (m_startShell || m_showHelp || m_showVersion || m_po.enabled(m_batch)) {
+    if (m_startShell || m_startMcp || m_startMcpHttp || m_showHelp || m_showVersion ||
+        m_po.enabled(m_batch)) {
       m_startUI = false;
     }
   }

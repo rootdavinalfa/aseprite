@@ -36,6 +36,9 @@ public:
 
   bool startUI() const { return m_startUI; }
   bool startShell() const { return m_startShell; }
+  bool startMcp() const { return m_startMcp; }
+  bool startMcpHttp() const { return m_startMcpHttp; }
+  int mcpHttpPort() const { return m_mcpHttpPort; }
   bool previewCLI() const { return m_previewCLI; }
   bool showHelp() const { return m_showHelp; }
   bool showVersion() const { return m_showVersion; }
@@ -110,6 +113,9 @@ private:
   base::ProgramOptions m_po;
   bool m_startUI;
   bool m_startShell;
+  bool m_startMcp;
+  bool m_startMcpHttp;
+  int m_mcpHttpPort;
   bool m_previewCLI;
   bool m_showHelp;
   bool m_showVersion;
@@ -117,6 +123,8 @@ private:
 
 #ifdef ENABLE_SCRIPTING
   Option& m_shell;
+  Option& m_mcp;
+  Option& m_mcpHttp;
 #endif
   Option& m_batch;
   Option& m_preview;

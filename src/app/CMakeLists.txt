@@ -191,9 +191,28 @@ if(ENABLE_SCRIPTING)
 
   target_sources(app-lib PRIVATE
     commands/cmd_developer_console.cpp
+    commands/cmd_mcp_server.cpp
+    commands/cmd_mcp_server.h
     commands/cmd_open_script_folder.cpp
     commands/cmd_run_script.cpp
     commands/debugger.cpp
+    mcp/mcp_fonts.cpp
+    mcp/mcp_fonts.h
+    mcp/mcp_protocol.cpp
+    mcp/mcp_protocol.h
+    mcp/mcp_server.cpp
+    mcp/mcp_server.h
+    mcp/mcp_tool_context.cpp
+    mcp/mcp_tool_context.h
+    mcp/mcp_tools_animation.cpp
+    mcp/mcp_tools_canvas_draw.cpp
+    mcp/mcp_tools_io.cpp
+    mcp/mcp_tools_layers.cpp
+    mcp/mcp_tools_lua.h
+    mcp/mcp_tools_misc.cpp
+    mcp/mcp_tools_palette_transform.cpp
+    mcp/mcp_tools_registry.cpp
+    mcp/mcp_tools_registry.h
     script/app_command_object.cpp
     script/app_clipboard_object.cpp
     script/app_fs_object.cpp
@@ -255,7 +274,9 @@ if(ENABLE_SCRIPTING)
     script/version_class.cpp
     script/window_class.cpp
     shell.cpp
-    ui/devconsole_view.cpp)
+    ui/devconsole_view.cpp
+    ui/mcp_server_window.cpp
+    ui/mcp_server_window.h)
 endif()
 
 # Main app sources

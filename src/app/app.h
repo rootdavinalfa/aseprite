@@ -139,6 +139,9 @@ private:
   std::unique_ptr<AppMenus> m_appMenus;
   bool m_isGui;
   bool m_isShell;
+  bool m_isMcp;
+  bool m_isMcpHttp;
+  int m_mcpHttpPort;
 #if !LAF_SKIA
   bool m_showCliOnlyWarning = false;
 #endif

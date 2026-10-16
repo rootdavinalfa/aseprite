@@ -92,6 +92,7 @@
 #include <memory>
 
 #ifdef ENABLE_SCRIPTING
+  #include "app/mcp/mcp_server.h"
   #include "app/script/engine.h"
   #include "app/shell.h"
 #endif
@@ -246,6 +247,9 @@ App::App(AppMod* mod)
   , m_legacy(nullptr)
   , m_isGui(false)
   , m_isShell(false)
+  , m_isMcp(false)
+  , m_isMcpHttp(false)
+  , m_mcpHttpPort(0)
   , m_backupIndicator(nullptr)
 #ifdef ENABLE_SCRIPTING
   , m_engine(new script::Engine)
@@ -281,6 +285,9 @@ int App::initialize(const AppOptions& options)
 #endif
 
   m_isShell = options.startShell();
+  m_isMcp = options.startMcp();
+  m_isMcpHttp = options.startMcpHttp();
+  m_mcpHttpPort = options.mcpHttpPort();
   m_coreModules = std::make_unique<CoreModules>();
 
   auto& pref = preferences();
@@ -552,6 +559,20 @@ void App::run(const bool runGuiManager)
       checkUpdate.launch();
 #endif
 
+#ifdef ENABLE_SCRIPTING
+  #ifdef ENABLE_WEBSOCKET
+      // Start the MCP HTTP server if it was enabled in the
+      // "MCP Server" dialog (Edit > MCP Server...).
+      if (preferences().mcp.enabled()) {
+        const int port = preferences().mcp.port();
+        std::string error;
+        if (!mcp::McpServer::instance()->startHttp(port, error)) {
+          LOG(ERROR, "APP: Cannot start MCP HTTP server on port %d: %s\n", port, error.c_str());
+        }
+      }
+  #endif
+#endif
+
 #if !ENABLE_SENTRY
       app::SendCrash sendCrash;
       sendCrash.search();
@@ -576,10 +597,29 @@ void App::run(const bool runGuiManager)
           set_app_state(AppState::kClosingWithException);
           throw;
         }
+
+#ifdef ENABLE_SCRIPTING
+  #ifdef ENABLE_WEBSOCKET
+        mcp::McpServer::instance()->stopHttp();
+  #endif
+#endif
       }
     }
 
 #ifdef ENABLE_SCRIPTING
+    // Start the MCP server on stdio.
+    if (m_isMcp) {
+      mcp::McpServer::instance()->runStdio(*m_engine, *context());
+    }
+
+  #ifdef ENABLE_WEBSOCKET
+    // Start the MCP HTTP server; blocks until the process is
+    // terminated (SIGINT/SIGTERM).
+    if (m_isMcpHttp) {
+      mcp::McpServer::instance()->runHttpOnly(m_mcpHttpPort);
+    }
+  #endif
+
     // Start shell to execute scripts.
     if (m_isShell) {
       m_engine->printLastResult(); // TODO is this needed?

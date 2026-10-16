@@ -1,0 +1,39 @@
+<!-- Aseprite -->
+<!-- Copyright (C) 2026  Igara Studio S.A. -->
+<gui>
+  <window id="mcp_server" text="@.mcp_server" minwidth="400">
+    <vbox>
+      <hbox>
+        <textbox id="status" text="@.mcp_status_stopped" expansive="true" style="textbox_label" />
+        <label text="@.mcp_port" for="port" />
+        <entry id="port" maxsize="5" minwidth="50" />
+        <button id="start_stop" text="@.mcp_start" magnet="true" minwidth="60" />
+      </hbox>
+      <separator horizontal="true" />
+      <textbox text="@.mcp_stdio_howto" wordwrap="true" style="textbox_label" />
+      <hbox>
+        <entry id="stdio_command" readonly="true" maxsize="4096" expansive="true" />
+      </hbox>
+      <hbox>
+        <entry id="stdio_snippet" readonly="true" maxsize="4096" expansive="true" />
+        <button id="copy_stdio" text="@.mcp_copy" minwidth="60" />
+      </hbox>
+      <separator horizontal="true" />
+      <textbox text="@.mcp_http_howto" wordwrap="true" style="textbox_label" />
+      <hbox>
+        <entry id="http_url" readonly="true" maxsize="4096" expansive="true" />
+      </hbox>
+      <hbox>
+        <entry id="http_snippet" readonly="true" maxsize="4096" expansive="true" />
+        <button id="copy_http" text="@.mcp_copy" minwidth="60" />
+      </hbox>
+      <separator horizontal="true" />
+      <textbox text="@.mcp_howto_title" wordwrap="true" style="textbox_label" />
+      <textbox text="@.mcp_client_example" wordwrap="true" style="textbox_label" />
+      <hbox>
+        <boxfiller />
+        <button text="@general.close" closewindow="true" magnet="true" minwidth="60" />
+      </hbox>
+    </vbox>
+  </window>
+</gui>
