@@ -303,12 +303,31 @@ void overwrite_unsecure_functions(lua_State* L)
   }
 }
 
+// Server-driven scripts (see ScopedFullAccess) skip the interactive
+// permission checks; the counter allows nesting.
+static int g_fullAccessCount = 0;
+
+ScopedFullAccess::ScopedFullAccess()
+{
+  ++g_fullAccessCount;
+}
+
+ScopedFullAccess::~ScopedFullAccess()
+{
+  --g_fullAccessCount;
+}
+
 bool ask_access(lua_State* L,
                 const char* filename,
                 const FileAccessMode mode,
                 const ResourceType resourceType,
                 const int stackLevel)
 {
+  // Server-driven scripts run with full access: there is no user able
+  // to answer the permission dialog.
+  if (g_fullAccessCount > 0)
+    return true;
+
   // Ask for permission to open the file
   if (App::instance()->context()->isUIAvailable()) {
     const std::string script = get_script_filename(L, stackLevel);

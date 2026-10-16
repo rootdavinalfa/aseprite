@@ -38,6 +38,16 @@ void overwrite_unsecure_functions(lua_State* L);
 
 lua_CFunction get_original_io_open();
 
+// RAII guard that grants full access to scripted code without the
+// interactive permission dialogs. Used for server-driven scripts
+// (e.g. the MCP tool handlers): the request has no user able to answer
+// the dialog, and blocking the UI thread on it would hang both.
+class ScopedFullAccess {
+public:
+  ScopedFullAccess();
+  ~ScopedFullAccess();
+};
+
 bool ask_access(lua_State* L,
                 const char* filename,
                 const FileAccessMode mode,

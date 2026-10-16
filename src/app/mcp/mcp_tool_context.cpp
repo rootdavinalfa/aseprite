@@ -16,6 +16,7 @@
 #include "app/doc.h"
 #include "app/doc_access.h"
 #include "app/script/engine.h"
+#include "app/script/security.h"
 #include "app/site.h"
 #include "base/fs.h"
 #include "base/time.h"
@@ -197,6 +198,9 @@ ToolResult ToolContext::runLua(const std::string& code)
 
   EngineCapture capture;
   script::ScopedEngineDelegate delegate(m_engine, &capture);
+  // MCP tools act on the user's behalf; the request has no user able
+  // to answer the interactive script-access dialogs.
+  script::ScopedFullAccess fullAccess;
   const bool ok = m_engine->evalCode(code, "mcp:tool");
 
   if (!ok) {
